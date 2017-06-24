@@ -1,5 +1,6 @@
 // This prevents pollution of the global namespace
 var SQL = (function () {
+  var Module = window.Module;
 var e;e||(e=eval("(function() { try { return Module || {} } catch(e) { return {} } })()"));var aa={},ba;for(ba in e)e.hasOwnProperty(ba)&&(aa[ba]=e[ba]);var da=!1,ea=!1,k=!1,fa=!1;
 if(e.ENVIRONMENT)if("WEB"===e.ENVIRONMENT)da=!0;else if("WORKER"===e.ENVIRONMENT)ea=!0;else if("NODE"===e.ENVIRONMENT)k=!0;else if("SHELL"===e.ENVIRONMENT)fa=!0;else throw Error("The provided Module['ENVIRONMENT'] value is not valid. It must be one of: WEB|WORKER|NODE|SHELL.");else da="object"===typeof window,ea="function"===typeof importScripts,k="object"===typeof process&&"function"===typeof require&&!da&&!ea,fa=!da&&!k&&!ea;
 if(k){e.print||(e.print=console.log);e.printErr||(e.printErr=console.warn);var ga,ia;e.read=function(a,b){ga||(ga=require("fs"));ia||(ia=require("path"));a=ia.normalize(a);var c=ga.readFileSync(a);return b?c:c.toString()};e.readBinary=function(a){a=e.read(a,!0);a.buffer||(a=new Uint8Array(a));assert(a.buffer);return a};e.load=function(a){ja(read(a))};e.thisProgram||(e.thisProgram=1<process.argv.length?process.argv[1].replace(/\\/g,"/"):"unknown-program");e.arguments=process.argv.slice(2);"undefined"!==

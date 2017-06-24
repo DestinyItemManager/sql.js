@@ -1,5 +1,6 @@
 // This prevents pollution of the global namespace
 var SQL = (function () {
+  var Module = window.Module;
 // The Module object: Our interface to the outside world. We import
 // and export values on it, and do the work to get that through
 // closure compiler if necessary. There are various ways Module can be used:
