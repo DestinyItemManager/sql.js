@@ -41,7 +41,7 @@ SQLite.BLOB = 4;
 SQLite.NULL = 5;
 SQLite.UTF8 = 1;
 
-var SQL = {}
+var SQL = window.SQL || {};
 
 Module['onRuntimeInitialized'] = function() {
   Runtime = Module['Runtime'];
@@ -493,7 +493,9 @@ Module['onRuntimeInitialized'] = function() {
       }
       stack = Runtime.stackSave();
       nextSqlPtr = Runtime.stackAlloc(sql.length << 2 + 1);
-      writeStringToMemory(sql, nextSqlPtr);
+      var buflen = sql.length<<2 + 1;
+      nextSqlPtr = Runtime.stackAlloc(buflen);
+      stringToUTF8(sql, nextSqlPtr, buflen);
       pzTail = Runtime.stackAlloc(4);
       results = [];
       while (getValue(nextSqlPtr, 'i8') !== NULL) {
