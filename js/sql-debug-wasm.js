@@ -6527,7 +6527,7 @@ SQLite.BLOB = 4;
 SQLite.NULL = 5;
 SQLite.UTF8 = 1;
 
-var SQL = window.SQL || {};
+var SQL = window['SQL'] || {};
 
 Module['onRuntimeInitialized'] = function() {
   Runtime = Module['Runtime'];
@@ -7257,8 +7257,8 @@ Module['onRuntimeInitialized'] = function() {
   Module.SQL = SQL
 
   // Callback to notify loading is done and SQL can be used
-  if (typeof SQL.onRuntimeInitialized === 'function') {
-    SQL.onRuntimeInitialized()
+  if (typeof SQL['onRuntimeInitialized'] === 'function') {
+    SQL['onRuntimeInitialized']();
   }
 }.bind(this)
 
