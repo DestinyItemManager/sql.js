@@ -2,22 +2,23 @@
 var SQL = (function () {
   var Module = window.Module;
 // The Module object: Our interface to the outside world. We import
-// and export values on it, and do the work to get that through
-// closure compiler if necessary. There are various ways Module can be used:
+// and export values on it. There are various ways Module can be used:
 // 1. Not defined. We create it here
 // 2. A function parameter, function(Module) { ..generated code.. }
 // 3. pre-run appended it, var Module = {}; ..generated code..
 // 4. External script tag defines var Module.
-// We need to do an eval in order to handle the closure compiler
-// case, where this code here is minified but Module was defined
-// elsewhere (e.g. case 4 above). We also need to check if Module
-// already exists (e.g. case 3 above).
+// We need to check if Module already exists (e.g. case 3 above).
+// Substitution will be replaced with actual code on later stage of the build,
+// this way Closure Compiler will not mangle it (e.g. case 4. above).
 // Note that if you want to run closure, and also to use Module
 // after the generated code, you will need to define   var Module = {};
 // before the code. Then that object will be used in the code, and you
 // can continue to use Module afterwards as well.
-var Module;
-if (!Module) Module = (typeof Module !== 'undefined' ? Module : null) || {};
+var Module = typeof Module !== 'undefined' ? Module : {};
+
+// --pre-jses are emitted after the Module integration code, so that they can
+// refer to Module (if they choose; they can also define Module)
+
 
 // Sometimes an existing Module object exists with properties
 // meant to overwrite the default module functionality. Here
@@ -25,7 +26,8 @@ if (!Module) Module = (typeof Module !== 'undefined' ? Module : null) || {};
 // the current environment's defaults to avoid having to be so
 // defensive during initialization.
 var moduleOverrides = {};
-for (var key in Module) {
+var key;
+for (key in Module) {
   if (Module.hasOwnProperty(key)) {
     moduleOverrides[key] = Module[key];
   }
@@ -73,10 +75,11 @@ if (ENVIRONMENT_IS_NODE) {
   var nodePath;
 
   Module['read'] = function shell_read(filename, binary) {
-    if (!nodeFS) nodeFS = require('fs');
-    if (!nodePath) nodePath = require('path');
-    filename = nodePath['normalize'](filename);
-    var ret = nodeFS['readFileSync'](filename);
+    var ret;
+      if (!nodeFS) nodeFS = require('fs');
+      if (!nodePath) nodePath = require('path');
+      filename = nodePath['normalize'](filename);
+      ret = nodeFS['readFileSync'](filename);
     return binary ? ret : ret.toString();
   };
 
@@ -87,10 +90,6 @@ if (ENVIRONMENT_IS_NODE) {
     }
     assert(ret.buffer);
     return ret;
-  };
-
-  Module['load'] = function load(f) {
-    globalEval(read(f));
   };
 
   if (!Module['thisProgram']) {
@@ -113,6 +112,11 @@ if (ENVIRONMENT_IS_NODE) {
       throw ex;
     }
   });
+  // Currently node will swallow unhandled rejections, but this behavior is
+  // deprecated, and in the future it will exit with error status.
+  process['on']('unhandledRejection', function(reason, p) {
+    process['exit'](1);
+  });
 
   Module['inspect'] = function () { return '[Emscripten Module object]'; };
 }
@@ -121,16 +125,19 @@ else if (ENVIRONMENT_IS_SHELL) {
   if (typeof printErr != 'undefined') Module['printErr'] = printErr; // not present in v8 or older sm
 
   if (typeof read != 'undefined') {
-    Module['read'] = read;
+    Module['read'] = function shell_read(f) {
+      return read(f);
+    };
   } else {
     Module['read'] = function shell_read() { throw 'no read() available' };
   }
 
   Module['readBinary'] = function readBinary(f) {
+    var data;
     if (typeof readbuffer === 'function') {
       return new Uint8Array(readbuffer(f));
     }
-    var data = read(f, 'binary');
+    data = read(f, 'binary');
     assert(typeof data === 'object');
     return data;
   };
@@ -146,23 +153,22 @@ else if (ENVIRONMENT_IS_SHELL) {
       quit(status);
     }
   }
-
 }
 else if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
   Module['read'] = function shell_read(url) {
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', url, false);
-    xhr.send(null);
-    return xhr.responseText;
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, false);
+      xhr.send(null);
+      return xhr.responseText;
   };
 
   if (ENVIRONMENT_IS_WORKER) {
     Module['readBinary'] = function readBinary(url) {
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', url, false);
-      xhr.responseType = 'arraybuffer';
-      xhr.send(null);
-      return new Uint8Array(xhr.response);
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, false);
+        xhr.responseType = 'arraybuffer';
+        xhr.send(null);
+        return new Uint8Array(xhr.response);
     };
   }
 
@@ -173,9 +179,9 @@ else if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
     xhr.onload = function xhr_onload() {
       if (xhr.status == 200 || (xhr.status == 0 && xhr.response)) { // file URLs can return 0
         onload(xhr.response);
-      } else {
-        onerror();
+        return;
       }
+      onerror();
     };
     xhr.onerror = onerror;
     xhr.send(null);
@@ -202,27 +208,15 @@ else if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
     }));
   }
 
-  if (ENVIRONMENT_IS_WORKER) {
-    Module['load'] = importScripts;
-  }
-
   if (typeof Module['setWindowTitle'] === 'undefined') {
     Module['setWindowTitle'] = function(title) { document.title = title };
   }
 }
 else {
-  // Unreachable because SHELL is dependant on the others
-  throw 'Unknown runtime environment. Where are we?';
+  // Unreachable because SHELL is dependent on the others
+  throw new Error('Unknown runtime environment. Where are we?');
 }
 
-function globalEval(x) {
-  eval.call(null, x);
-}
-if (!Module['load'] && Module['read']) {
-  Module['load'] = function load(f) {
-    globalEval(Module['read'](f));
-  };
-}
 if (!Module['print']) {
   Module['print'] = function(){};
 }
@@ -252,7 +246,7 @@ Module['preRun'] = [];
 Module['postRun'] = [];
 
 // Merge back in the overrides
-for (var key in moduleOverrides) {
+for (key in moduleOverrides) {
   if (moduleOverrides.hasOwnProperty(key)) {
     Module[key] = moduleOverrides[key];
   }
@@ -265,6 +259,144 @@ moduleOverrides = undefined;
 
 // {{PREAMBLE_ADDITIONS}}
 
+var STACK_ALIGN = 16;
+
+
+function staticAlloc(size) {
+  assert(!staticSealed);
+  var ret = STATICTOP;
+  STATICTOP = (STATICTOP + size + 15) & -16;
+  return ret;
+}
+
+function dynamicAlloc(size) {
+  assert(DYNAMICTOP_PTR);
+  var ret = HEAP32[DYNAMICTOP_PTR>>2];
+  var end = (ret + size + 15) & -16;
+  HEAP32[DYNAMICTOP_PTR>>2] = end;
+  if (end >= TOTAL_MEMORY) {
+    var success = enlargeMemory();
+    if (!success) {
+      HEAP32[DYNAMICTOP_PTR>>2] = ret;
+      return 0;
+    }
+  }
+  return ret;
+}
+
+function alignMemory(size, factor) {
+  if (!factor) factor = STACK_ALIGN; // stack alignment (16-byte) by default
+  var ret = size = Math.ceil(size / factor) * factor;
+  return ret;
+}
+
+function getNativeTypeSize(type) {
+  switch (type) {
+    case 'i1': case 'i8': return 1;
+    case 'i16': return 2;
+    case 'i32': return 4;
+    case 'i64': return 8;
+    case 'float': return 4;
+    case 'double': return 8;
+    default: {
+      if (type[type.length-1] === '*') {
+        return 4; // A pointer
+      } else if (type[0] === 'i') {
+        var bits = parseInt(type.substr(1));
+        assert(bits % 8 === 0);
+        return bits / 8;
+      } else {
+        return 0;
+      }
+    }
+  }
+}
+
+function warnOnce(text) {
+  if (!warnOnce.shown) warnOnce.shown = {};
+  if (!warnOnce.shown[text]) {
+    warnOnce.shown[text] = 1;
+    Module.printErr(text);
+  }
+}
+
+
+
+var functionPointers = new Array(64);
+
+function addFunction(func) {
+  for (var i = 0; i < functionPointers.length; i++) {
+    if (!functionPointers[i]) {
+      functionPointers[i] = func;
+      return 2*(1 + i);
+    }
+  }
+  throw 'Finished up all reserved function pointers. Use a higher value for RESERVED_FUNCTION_POINTERS.';
+}
+
+function removeFunction(index) {
+  functionPointers[(index-2)/2] = null;
+}
+
+var funcWrappers = {};
+
+function getFuncWrapper(func, sig) {
+  if (!func) return; // on null pointer, return undefined
+  assert(sig);
+  if (!funcWrappers[sig]) {
+    funcWrappers[sig] = {};
+  }
+  var sigCache = funcWrappers[sig];
+  if (!sigCache[func]) {
+    // optimize away arguments usage in common cases
+    if (sig.length === 1) {
+      sigCache[func] = function dynCall_wrapper() {
+        return dynCall(sig, func);
+      };
+    } else if (sig.length === 2) {
+      sigCache[func] = function dynCall_wrapper(arg) {
+        return dynCall(sig, func, [arg]);
+      };
+    } else {
+      // general case
+      sigCache[func] = function dynCall_wrapper() {
+        return dynCall(sig, func, Array.prototype.slice.call(arguments));
+      };
+    }
+  }
+  return sigCache[func];
+}
+
+
+function makeBigInt(low, high, unsigned) {
+  return unsigned ? ((+((low>>>0)))+((+((high>>>0)))*4294967296.0)) : ((+((low>>>0)))+((+((high|0)))*4294967296.0));
+}
+
+function dynCall(sig, ptr, args) {
+  if (args && args.length) {
+    return Module['dynCall_' + sig].apply(null, [ptr].concat(args));
+  } else {
+    return Module['dynCall_' + sig].call(null, ptr);
+  }
+}
+
+
+
+var Runtime = {
+  // FIXME backwards compatibility layer for ports. Support some Runtime.*
+  //       for now, fix it there, then remove it from here. That way we
+  //       can minimize any period of breakage.
+  dynCall: dynCall, // for SDL2 port
+};
+
+// The address globals begin at. Very low in memory, for code size and optimization opportunities.
+// Above 0 is static memory, starting with globals.
+// Then the stack.
+// Then 'dynamic' memory for sbrk.
+var GLOBAL_BASE = 1024;
+
+
+
 // === Preamble library stuff ===
 
 // Documentation for the public APIs defined in this file must be updated in:
@@ -274,137 +406,6 @@ moduleOverrides = undefined;
 // You can also build docs locally as HTML or other formats in site/
 // An online HTML version (which may be of a different version of Emscripten)
 //    is up at http://kripken.github.io/emscripten-site/docs/api_reference/preamble.js.html
-
-//========================================
-// Runtime code shared with compiler
-//========================================
-
-var Runtime = {
-  setTempRet0: function (value) {
-    tempRet0 = value;
-    return value;
-  },
-  getTempRet0: function () {
-    return tempRet0;
-  },
-  stackSave: function () {
-    return STACKTOP;
-  },
-  stackRestore: function (stackTop) {
-    STACKTOP = stackTop;
-  },
-  getNativeTypeSize: function (type) {
-    switch (type) {
-      case 'i1': case 'i8': return 1;
-      case 'i16': return 2;
-      case 'i32': return 4;
-      case 'i64': return 8;
-      case 'float': return 4;
-      case 'double': return 8;
-      default: {
-        if (type[type.length-1] === '*') {
-          return Runtime.QUANTUM_SIZE; // A pointer
-        } else if (type[0] === 'i') {
-          var bits = parseInt(type.substr(1));
-          assert(bits % 8 === 0);
-          return bits/8;
-        } else {
-          return 0;
-        }
-      }
-    }
-  },
-  getNativeFieldSize: function (type) {
-    return Math.max(Runtime.getNativeTypeSize(type), Runtime.QUANTUM_SIZE);
-  },
-  STACK_ALIGN: 16,
-  prepVararg: function (ptr, type) {
-    if (type === 'double' || type === 'i64') {
-      // move so the load is aligned
-      if (ptr & 7) {
-        assert((ptr & 7) === 4);
-        ptr += 4;
-      }
-    } else {
-      assert((ptr & 3) === 0);
-    }
-    return ptr;
-  },
-  getAlignSize: function (type, size, vararg) {
-    // we align i64s and doubles on 64-bit boundaries, unlike x86
-    if (!vararg && (type == 'i64' || type == 'double')) return 8;
-    if (!type) return Math.min(size, 8); // align structures internally to 64 bits
-    return Math.min(size || (type ? Runtime.getNativeFieldSize(type) : 0), Runtime.QUANTUM_SIZE);
-  },
-  dynCall: function (sig, ptr, args) {
-    if (args && args.length) {
-      return Module['dynCall_' + sig].apply(null, [ptr].concat(args));
-    } else {
-      return Module['dynCall_' + sig].call(null, ptr);
-    }
-  },
-  functionPointers: [null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],
-  addFunction: function (func) {
-    for (var i = 0; i < Runtime.functionPointers.length; i++) {
-      if (!Runtime.functionPointers[i]) {
-        Runtime.functionPointers[i] = func;
-        return 2*(1 + i);
-      }
-    }
-    throw 'Finished up all reserved function pointers. Use a higher value for RESERVED_FUNCTION_POINTERS.';
-  },
-  removeFunction: function (index) {
-    Runtime.functionPointers[(index-2)/2] = null;
-  },
-  warnOnce: function (text) {
-    if (!Runtime.warnOnce.shown) Runtime.warnOnce.shown = {};
-    if (!Runtime.warnOnce.shown[text]) {
-      Runtime.warnOnce.shown[text] = 1;
-      Module.printErr(text);
-    }
-  },
-  funcWrappers: {},
-  getFuncWrapper: function (func, sig) {
-    assert(sig);
-    if (!Runtime.funcWrappers[sig]) {
-      Runtime.funcWrappers[sig] = {};
-    }
-    var sigCache = Runtime.funcWrappers[sig];
-    if (!sigCache[func]) {
-      // optimize away arguments usage in common cases
-      if (sig.length === 1) {
-        sigCache[func] = function dynCall_wrapper() {
-          return Runtime.dynCall(sig, func);
-        };
-      } else if (sig.length === 2) {
-        sigCache[func] = function dynCall_wrapper(arg) {
-          return Runtime.dynCall(sig, func, [arg]);
-        };
-      } else {
-        // general case
-        sigCache[func] = function dynCall_wrapper() {
-          return Runtime.dynCall(sig, func, Array.prototype.slice.call(arguments));
-        };
-      }
-    }
-    return sigCache[func];
-  },
-  getCompilerSetting: function (name) {
-    throw 'You must build with -s RETAIN_COMPILER_SETTINGS=1 for Runtime.getCompilerSetting or emscripten_get_compiler_setting to work';
-  },
-  stackAlloc: function (size) { var ret = STACKTOP;STACKTOP = (STACKTOP + size)|0;STACKTOP = (((STACKTOP)+15)&-16); return ret; },
-  staticAlloc: function (size) { var ret = STATICTOP;STATICTOP = (STATICTOP + size)|0;STATICTOP = (((STATICTOP)+15)&-16); return ret; },
-  dynamicAlloc: function (size) { var ret = HEAP32[DYNAMICTOP_PTR>>2];var end = (((ret + size + 15)|0) & -16);HEAP32[DYNAMICTOP_PTR>>2] = end;if (end >= TOTAL_MEMORY) {var success = enlargeMemory();if (!success) {HEAP32[DYNAMICTOP_PTR>>2] = ret;return 0;}}return ret;},
-  alignMemory: function (size,quantum) { var ret = size = Math.ceil((size)/(quantum ? quantum : 16))*(quantum ? quantum : 16); return ret; },
-  makeBigInt: function (low,high,unsigned) { var ret = (unsigned ? ((+((low>>>0)))+((+((high>>>0)))*4294967296.0)) : ((+((low>>>0)))+((+((high|0)))*4294967296.0))); return ret; },
-  GLOBAL_BASE: 1024,
-  QUANTUM_SIZE: 4,
-  __dummy__: 0
-}
-
-
-
-Module["Runtime"] = Runtime;
 
 
 
@@ -427,146 +428,78 @@ var globalScope = this;
 // Returns the C function with a specified identifier (for C++, you need to do manual name mangling)
 function getCFunc(ident) {
   var func = Module['_' + ident]; // closure exported function
-  if (!func) {
-    try { func = eval('_' + ident); } catch(e) {}
-  }
-  assert(func, 'Cannot call unknown function ' + ident + ' (perhaps LLVM optimizations or closure removed it?)');
+  assert(func, 'Cannot call unknown function ' + ident + ', make sure it is exported');
   return func;
 }
 
-var cwrap, ccall;
-(function(){
-  var JSfuncs = {
-    // Helpers for cwrap -- it can't refer to Runtime directly because it might
-    // be renamed by closure, instead it calls JSfuncs['stackSave'].body to find
-    // out what the minified function name is.
-    'stackSave': function() {
-      Runtime.stackSave()
-    },
-    'stackRestore': function() {
-      Runtime.stackRestore()
-    },
-    // type conversion from js to c
-    'arrayToC' : function(arr) {
-      var ret = Runtime.stackAlloc(arr.length);
-      writeArrayToMemory(arr, ret);
-      return ret;
-    },
-    'stringToC' : function(str) {
-      var ret = 0;
-      if (str !== null && str !== undefined && str !== 0) { // null string
-        // at most 4 bytes per UTF-8 code point, +1 for the trailing '\0'
-        var len = (str.length << 2) + 1;
-        ret = Runtime.stackAlloc(len);
-        stringToUTF8(str, ret, len);
-      }
-      return ret;
-    }
-  };
-  // For fast lookup of conversion functions
-  var toC = {'string' : JSfuncs['stringToC'], 'array' : JSfuncs['arrayToC']};
-
-  // C calling interface.
-  ccall = function ccallFunc(ident, returnType, argTypes, args, opts) {
-    var func = getCFunc(ident);
-    var cArgs = [];
-    var stack = 0;
-    if (args) {
-      for (var i = 0; i < args.length; i++) {
-        var converter = toC[argTypes[i]];
-        if (converter) {
-          if (stack === 0) stack = Runtime.stackSave();
-          cArgs[i] = converter(args[i]);
-        } else {
-          cArgs[i] = args[i];
-        }
-      }
-    }
-    var ret = func.apply(null, cArgs);
-    if (returnType === 'string') ret = Pointer_stringify(ret);
-    if (stack !== 0) {
-      if (opts && opts.async) {
-        EmterpreterAsync.asyncFinalizers.push(function() {
-          Runtime.stackRestore(stack);
-        });
-        return;
-      }
-      Runtime.stackRestore(stack);
+var JSfuncs = {
+  // Helpers for cwrap -- it can't refer to Runtime directly because it might
+  // be renamed by closure, instead it calls JSfuncs['stackSave'].body to find
+  // out what the minified function name is.
+  'stackSave': function() {
+    stackSave()
+  },
+  'stackRestore': function() {
+    stackRestore()
+  },
+  // type conversion from js to c
+  'arrayToC' : function(arr) {
+    var ret = stackAlloc(arr.length);
+    writeArrayToMemory(arr, ret);
+    return ret;
+  },
+  'stringToC' : function(str) {
+    var ret = 0;
+    if (str !== null && str !== undefined && str !== 0) { // null string
+      // at most 4 bytes per UTF-8 code point, +1 for the trailing '\0'
+      var len = (str.length << 2) + 1;
+      ret = stackAlloc(len);
+      stringToUTF8(str, ret, len);
     }
     return ret;
   }
+};
+// For fast lookup of conversion functions
+var toC = {'string' : JSfuncs['stringToC'], 'array' : JSfuncs['arrayToC']};
 
-  var sourceRegex = /^function\s*[a-zA-Z$_0-9]*\s*\(([^)]*)\)\s*{\s*([^*]*?)[\s;]*(?:return\s*(.*?)[;\s]*)?}$/;
-  function parseJSFunc(jsfunc) {
-    // Match the body and the return value of a javascript function source
-    var parsed = jsfunc.toString().match(sourceRegex).slice(1);
-    return {arguments : parsed[0], body : parsed[1], returnValue: parsed[2]}
-  }
-
-  // sources of useful functions. we create this lazily as it can trigger a source decompression on this entire file
-  var JSsource = null;
-  function ensureJSsource() {
-    if (!JSsource) {
-      JSsource = {};
-      for (var fun in JSfuncs) {
-        if (JSfuncs.hasOwnProperty(fun)) {
-          // Elements of toCsource are arrays of three items:
-          // the code, and the return value
-          JSsource[fun] = parseJSFunc(JSfuncs[fun]);
-        }
+// C calling interface.
+function ccall (ident, returnType, argTypes, args, opts) {
+  var func = getCFunc(ident);
+  var cArgs = [];
+  var stack = 0;
+  if (args) {
+    for (var i = 0; i < args.length; i++) {
+      var converter = toC[argTypes[i]];
+      if (converter) {
+        if (stack === 0) stack = stackSave();
+        cArgs[i] = converter(args[i]);
+      } else {
+        cArgs[i] = args[i];
       }
     }
   }
+  var ret = func.apply(null, cArgs);
+  if (returnType === 'string') ret = Pointer_stringify(ret);
+  if (stack !== 0) {
+    stackRestore(stack);
+  }
+  return ret;
+}
 
-  cwrap = function cwrap(ident, returnType, argTypes) {
-    argTypes = argTypes || [];
-    var cfunc = getCFunc(ident);
-    // When the function takes numbers and returns a number, we can just return
-    // the original function
-    var numericArgs = argTypes.every(function(type){ return type === 'number'});
-    var numericRet = (returnType !== 'string');
-    if ( numericRet && numericArgs) {
-      return cfunc;
-    }
-    // Creation of the arguments list (["$1","$2",...,"$nargs"])
-    var argNames = argTypes.map(function(x,i){return '$'+i});
-    var funcstr = "(function(" + argNames.join(',') + ") {";
-    var nargs = argTypes.length;
-    if (!numericArgs) {
-      // Generate the code needed to convert the arguments from javascript
-      // values to pointers
-      ensureJSsource();
-      funcstr += 'var stack = ' + JSsource['stackSave'].body + ';';
-      for (var i = 0; i < nargs; i++) {
-        var arg = argNames[i], type = argTypes[i];
-        if (type === 'number') continue;
-        var convertCode = JSsource[type + 'ToC']; // [code, return]
-        funcstr += 'var ' + convertCode.arguments + ' = ' + arg + ';';
-        funcstr += convertCode.body + ';';
-        funcstr += arg + '=(' + convertCode.returnValue + ');';
-      }
-    }
-
-    // When the code is compressed, the name of cfunc is not literally 'cfunc' anymore
-    var cfuncname = parseJSFunc(function(){return cfunc}).returnValue;
-    // Call the function
-    funcstr += 'var ret = ' + cfuncname + '(' + argNames.join(',') + ');';
-    if (!numericRet) { // Return type can only by 'string' or 'number'
-      // Convert the result to a string
-      var strgfy = parseJSFunc(function(){return Pointer_stringify}).returnValue;
-      funcstr += 'ret = ' + strgfy + '(ret);';
-    }
-    if (!numericArgs) {
-      // If we had a stack, restore it
-      ensureJSsource();
-      funcstr += JSsource['stackRestore'].body.replace('()', '(stack)') + ';';
-    }
-    funcstr += 'return ret})';
-    return eval(funcstr);
-  };
-})();
-Module["ccall"] = ccall;
-Module["cwrap"] = cwrap;
+function cwrap (ident, returnType, argTypes) {
+  argTypes = argTypes || [];
+  var cfunc = getCFunc(ident);
+  // When the function takes numbers and returns a number, we can just return
+  // the original function
+  var numericArgs = argTypes.every(function(type){ return type === 'number'});
+  var numericRet = returnType !== 'string';
+  if (numericRet && numericArgs) {
+    return cfunc;
+  }
+  return function() {
+    return ccall(ident, returnType, argTypes, arguments);
+  }
+}
 
 /** @type {function(number, number, string, boolean=)} */
 function setValue(ptr, value, type, noSafe) {
@@ -583,7 +516,6 @@ function setValue(ptr, value, type, noSafe) {
       default: abort('invalid type for setValue: ' + type);
     }
 }
-Module["setValue"] = setValue;
 
 /** @type {function(number, string, boolean=)} */
 function getValue(ptr, type, noSafe) {
@@ -597,22 +529,16 @@ function getValue(ptr, type, noSafe) {
       case 'i64': return HEAP32[((ptr)>>2)];
       case 'float': return HEAPF32[((ptr)>>2)];
       case 'double': return HEAPF64[((ptr)>>3)];
-      default: abort('invalid type for setValue: ' + type);
+      default: abort('invalid type for getValue: ' + type);
     }
   return null;
 }
-Module["getValue"] = getValue;
 
 var ALLOC_NORMAL = 0; // Tries to use _malloc()
 var ALLOC_STACK = 1; // Lives for the duration of the current function call
 var ALLOC_STATIC = 2; // Cannot be freed
 var ALLOC_DYNAMIC = 3; // Cannot be freed except through sbrk
 var ALLOC_NONE = 4; // Do not allocate
-Module["ALLOC_NORMAL"] = ALLOC_NORMAL;
-Module["ALLOC_STACK"] = ALLOC_STACK;
-Module["ALLOC_STATIC"] = ALLOC_STATIC;
-Module["ALLOC_DYNAMIC"] = ALLOC_DYNAMIC;
-Module["ALLOC_NONE"] = ALLOC_NONE;
 
 // allocate(): This is for internal use. You can use it yourself as well, but the interface
 //             is a little tricky (see docs right below). The reason is that it is optimized
@@ -644,11 +570,12 @@ function allocate(slab, types, allocator, ptr) {
   if (allocator == ALLOC_NONE) {
     ret = ptr;
   } else {
-    ret = [typeof _malloc === 'function' ? _malloc : Runtime.staticAlloc, Runtime.stackAlloc, Runtime.staticAlloc, Runtime.dynamicAlloc][allocator === undefined ? ALLOC_STATIC : allocator](Math.max(size, singleType ? 1 : types.length));
+    ret = [typeof _malloc === 'function' ? _malloc : staticAlloc, stackAlloc, staticAlloc, dynamicAlloc][allocator === undefined ? ALLOC_STATIC : allocator](Math.max(size, singleType ? 1 : types.length));
   }
 
   if (zeroinit) {
-    var ptr = ret, stop;
+    var stop;
+    ptr = ret;
     assert((ret & 3) == 0);
     stop = ret + (size & ~3);
     for (; ptr < stop; ptr += 4) {
@@ -674,10 +601,6 @@ function allocate(slab, types, allocator, ptr) {
   while (i < size) {
     var curr = slab[i];
 
-    if (typeof curr === 'function') {
-      curr = Runtime.getFunctionIndex(curr);
-    }
-
     type = singleType || types[i];
     if (type === 0) {
       i++;
@@ -690,7 +613,7 @@ function allocate(slab, types, allocator, ptr) {
 
     // no need to look up size unless type changes, so cache it
     if (previousType !== type) {
-      typeSize = Runtime.getNativeTypeSize(type);
+      typeSize = getNativeTypeSize(type);
       previousType = type;
     }
     i += typeSize;
@@ -698,15 +621,13 @@ function allocate(slab, types, allocator, ptr) {
 
   return ret;
 }
-Module["allocate"] = allocate;
 
 // Allocate memory during any stage of startup - static memory early on, dynamic memory later, malloc when ready
 function getMemory(size) {
-  if (!staticSealed) return Runtime.staticAlloc(size);
-  if (!runtimeInitialized) return Runtime.dynamicAlloc(size);
+  if (!staticSealed) return staticAlloc(size);
+  if (!runtimeInitialized) return dynamicAlloc(size);
   return _malloc(size);
 }
-Module["getMemory"] = getMemory;
 
 /** @type {function(number, number=)} */
 function Pointer_stringify(ptr, length) {
@@ -738,9 +659,8 @@ function Pointer_stringify(ptr, length) {
     }
     return ret;
   }
-  return Module['UTF8ToString'](ptr);
+  return UTF8ToString(ptr);
 }
-Module["Pointer_stringify"] = Pointer_stringify;
 
 // Given a pointer 'ptr' to a null-terminated ASCII-encoded string in the emscripten HEAP, returns
 // a copy of that string as a Javascript String object.
@@ -753,7 +673,6 @@ function AsciiToString(ptr) {
     str += String.fromCharCode(ch);
   }
 }
-Module["AsciiToString"] = AsciiToString;
 
 // Copies the given Javascript String object 'str' to the emscripten HEAP at address 'outPtr',
 // null-terminated and encoded in ASCII form. The copy will require at most str.length+1 bytes of space in the HEAP.
@@ -761,7 +680,6 @@ Module["AsciiToString"] = AsciiToString;
 function stringToAscii(str, outPtr) {
   return writeAsciiToMemory(str, outPtr, false);
 }
-Module["stringToAscii"] = stringToAscii;
 
 // Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the given array that contains uint8 values, returns
 // a copy of that string as a Javascript String object.
@@ -812,7 +730,6 @@ function UTF8ArrayToString(u8Array, idx) {
     }
   }
 }
-Module["UTF8ArrayToString"] = UTF8ArrayToString;
 
 // Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the emscripten HEAP, returns
 // a copy of that string as a Javascript String object.
@@ -820,7 +737,6 @@ Module["UTF8ArrayToString"] = UTF8ArrayToString;
 function UTF8ToString(ptr) {
   return UTF8ArrayToString(HEAPU8,ptr);
 }
-Module["UTF8ToString"] = UTF8ToString;
 
 // Copies the given Javascript String object 'str' to the given byte array at address 'outIdx',
 // encoded in UTF8 form and null-terminated. The copy will require at most str.length*4+1 bytes of space in the HEAP.
@@ -885,7 +801,6 @@ function stringToUTF8Array(str, outU8Array, outIdx, maxBytesToWrite) {
   outU8Array[outIdx] = 0;
   return outIdx - startIdx;
 }
-Module["stringToUTF8Array"] = stringToUTF8Array;
 
 // Copies the given Javascript String object 'str' to the emscripten HEAP at address 'outPtr',
 // null-terminated and encoded in UTF8 form. The copy will require at most str.length*4+1 bytes of space in the HEAP.
@@ -895,7 +810,6 @@ Module["stringToUTF8Array"] = stringToUTF8Array;
 function stringToUTF8(str, outPtr, maxBytesToWrite) {
   return stringToUTF8Array(str, HEAPU8,outPtr, maxBytesToWrite);
 }
-Module["stringToUTF8"] = stringToUTF8;
 
 // Returns the number of bytes the given Javascript string takes if encoded as a UTF8 byte array, EXCLUDING the null terminator byte.
 
@@ -922,7 +836,6 @@ function lengthBytesUTF8(str) {
   }
   return len;
 }
-Module["lengthBytesUTF8"] = lengthBytesUTF8;
 
 // Given a pointer 'ptr' to a null-terminated UTF16LE-encoded string in the emscripten HEAP, returns
 // a copy of that string as a Javascript String object.
@@ -951,7 +864,6 @@ function UTF16ToString(ptr) {
     }
   }
 }
-
 
 // Copies the given Javascript String object 'str' to the emscripten HEAP at address 'outPtr',
 // null-terminated and encoded in UTF16 form. The copy will require at most str.length*4+2 bytes of space in the HEAP.
@@ -984,13 +896,11 @@ function stringToUTF16(str, outPtr, maxBytesToWrite) {
   return outPtr - startPtr;
 }
 
-
 // Returns the number of bytes the given Javascript string takes if encoded as a UTF16 byte array, EXCLUDING the null terminator byte.
 
 function lengthBytesUTF16(str) {
   return str.length*2;
 }
-
 
 function UTF32ToString(ptr) {
   var i = 0;
@@ -1011,7 +921,6 @@ function UTF32ToString(ptr) {
     }
   }
 }
-
 
 // Copies the given Javascript String object 'str' to the emscripten HEAP at address 'outPtr',
 // null-terminated and encoded in UTF32 form. The copy will require at most str.length*4+4 bytes of space in the HEAP.
@@ -1049,7 +958,6 @@ function stringToUTF32(str, outPtr, maxBytesToWrite) {
   return outPtr - startPtr;
 }
 
-
 // Returns the number of bytes the given Javascript string takes if encoded as a UTF16 byte array, EXCLUDING the null terminator byte.
 
 function lengthBytesUTF32(str) {
@@ -1065,33 +973,16 @@ function lengthBytesUTF32(str) {
   return len;
 }
 
+// Allocate heap space for a JS string, and write it there.
+// It is the responsibility of the caller to free() that memory.
+function allocateUTF8(str) {
+  var size = lengthBytesUTF8(str) + 1;
+  var ret = _malloc(size);
+  if (ret) stringToUTF8Array(str, HEAP8, ret, size);
+  return ret;
+}
 
 function demangle(func) {
-  var __cxa_demangle_func = Module['___cxa_demangle'] || Module['__cxa_demangle'];
-  if (__cxa_demangle_func) {
-    try {
-      var s =
-        func.substr(1);
-      var len = lengthBytesUTF8(s)+1;
-      var buf = _malloc(len);
-      stringToUTF8(s, buf, len);
-      var status = _malloc(4);
-      var ret = __cxa_demangle_func(buf, 0, 0, status);
-      if (getValue(status, 'i32') === 0 && ret) {
-        return Pointer_stringify(ret);
-      }
-      // otherwise, libcxxabi failed
-    } catch(e) {
-      // ignore problems here
-    } finally {
-      if (buf) _free(buf);
-      if (status) _free(status);
-      if (ret) _free(ret);
-    }
-    // failure when using libcxxabi, don't demangle
-    return func;
-  }
-  Runtime.warnOnce('warning: build with  -s DEMANGLE_SUPPORT=1  to link in libcxxabi demangling');
   return func;
 }
 
@@ -1127,7 +1018,6 @@ function stackTrace() {
   if (Module['extraStackTrace']) js += '\n' + Module['extraStackTrace']();
   return demangleAll(js);
 }
-Module["stackTrace"] = stackTrace;
 
 // Memory management
 
@@ -1217,6 +1107,7 @@ if (Module['buffer']) {
   {
     buffer = new ArrayBuffer(TOTAL_MEMORY);
   }
+  Module['buffer'] = buffer;
 }
 updateGlobalBufferViews();
 
@@ -1229,17 +1120,6 @@ function getTotalMemory() {
   HEAP32[0] = 0x63736d65; /* 'emsc' */
 HEAP16[1] = 0x6373;
 if (HEAPU8[2] !== 0x73 || HEAPU8[3] !== 0x63) throw 'Runtime error: expected the system to be little-endian!';
-
-Module['HEAP'] = HEAP;
-Module['buffer'] = buffer;
-Module['HEAP8'] = HEAP8;
-Module['HEAP16'] = HEAP16;
-Module['HEAP32'] = HEAP32;
-Module['HEAPU8'] = HEAPU8;
-Module['HEAPU16'] = HEAPU16;
-Module['HEAPU32'] = HEAPU32;
-Module['HEAPF32'] = HEAPF32;
-Module['HEAPF64'] = HEAPF64;
 
 function callRuntimeCallbacks(callbacks) {
   while(callbacks.length > 0) {
@@ -1311,52 +1191,22 @@ function postRun() {
 function addOnPreRun(cb) {
   __ATPRERUN__.unshift(cb);
 }
-Module["addOnPreRun"] = addOnPreRun;
 
 function addOnInit(cb) {
   __ATINIT__.unshift(cb);
 }
-Module["addOnInit"] = addOnInit;
 
 function addOnPreMain(cb) {
   __ATMAIN__.unshift(cb);
 }
-Module["addOnPreMain"] = addOnPreMain;
 
 function addOnExit(cb) {
   __ATEXIT__.unshift(cb);
 }
-Module["addOnExit"] = addOnExit;
 
 function addOnPostRun(cb) {
   __ATPOSTRUN__.unshift(cb);
 }
-Module["addOnPostRun"] = addOnPostRun;
-
-// Tools
-
-/** @type {function(string, boolean=, number=)} */
-function intArrayFromString(stringy, dontAddNull, length) {
-  var len = length > 0 ? length : lengthBytesUTF8(stringy)+1;
-  var u8array = new Array(len);
-  var numBytesWritten = stringToUTF8Array(stringy, u8array, 0, u8array.length);
-  if (dontAddNull) u8array.length = numBytesWritten;
-  return u8array;
-}
-Module["intArrayFromString"] = intArrayFromString;
-
-function intArrayToString(array) {
-  var ret = [];
-  for (var i = 0; i < array.length; i++) {
-    var chr = array[i];
-    if (chr > 0xFF) {
-      chr &= 0xFF;
-    }
-    ret.push(String.fromCharCode(chr));
-  }
-  return ret.join('');
-}
-Module["intArrayToString"] = intArrayToString;
 
 // Deprecated: This function should not be called because it is unsafe and does not provide
 // a maximum length limit of how many bytes it is allowed to write. Prefer calling the
@@ -1364,7 +1214,7 @@ Module["intArrayToString"] = intArrayToString;
 // to be secure from out of bounds writes.
 /** @deprecated */
 function writeStringToMemory(string, buffer, dontAddNull) {
-  Runtime.warnOnce('writeStringToMemory is deprecated and should not be called! Use stringToUTF8() instead!');
+  warnOnce('writeStringToMemory is deprecated and should not be called! Use stringToUTF8() instead!');
 
   var /** @type {number} */ lastChar, /** @type {number} */ end;
   if (dontAddNull) {
@@ -1377,12 +1227,10 @@ function writeStringToMemory(string, buffer, dontAddNull) {
   stringToUTF8(string, buffer, Infinity);
   if (dontAddNull) HEAP8[end] = lastChar; // Restore the value under the null character.
 }
-Module["writeStringToMemory"] = writeStringToMemory;
 
 function writeArrayToMemory(array, buffer) {
   HEAP8.set(array, buffer);
 }
-Module["writeArrayToMemory"] = writeArrayToMemory;
 
 function writeAsciiToMemory(str, buffer, dontAddNull) {
   for (var i = 0; i < str.length; ++i) {
@@ -1391,7 +1239,6 @@ function writeAsciiToMemory(str, buffer, dontAddNull) {
   // Null-terminate the pointer to the HEAP.
   if (!dontAddNull) HEAP8[((buffer)>>0)]=0;
 }
-Module["writeAsciiToMemory"] = writeAsciiToMemory;
 
 function unSign(value, bits, ignore) {
   if (value >= 0) {
@@ -1415,36 +1262,6 @@ function reSign(value, bits, ignore) {
 }
 
 
-// check for imul support, and also for correctness ( https://bugs.webkit.org/show_bug.cgi?id=126345 )
-if (!Math['imul'] || Math['imul'](0xffffffff, 5) !== -5) Math['imul'] = function imul(a, b) {
-  var ah  = a >>> 16;
-  var al = a & 0xffff;
-  var bh  = b >>> 16;
-  var bl = b & 0xffff;
-  return (al*bl + ((ah*bl + al*bh) << 16))|0;
-};
-Math.imul = Math['imul'];
-
-if (!Math['fround']) {
-  var froundBuffer = new Float32Array(1);
-  Math['fround'] = function(x) { froundBuffer[0] = x; return froundBuffer[0] };
-}
-Math.fround = Math['fround'];
-
-if (!Math['clz32']) Math['clz32'] = function(x) {
-  x = x >>> 0;
-  for (var i = 0; i < 32; i++) {
-    if (x & (1 << (31 - i))) return i;
-  }
-  return 32;
-};
-Math.clz32 = Math['clz32']
-
-if (!Math['trunc']) Math['trunc'] = function(x) {
-  return x < 0 ? Math.ceil(x) : Math.floor(x);
-};
-Math.trunc = Math['trunc'];
-
 var Math_abs = Math.abs;
 var Math_cos = Math.cos;
 var Math_sin = Math.sin;
@@ -1463,6 +1280,7 @@ var Math_imul = Math.imul;
 var Math_fround = Math.fround;
 var Math_round = Math.round;
 var Math_min = Math.min;
+var Math_max = Math.max;
 var Math_clz32 = Math.clz32;
 var Math_trunc = Math.trunc;
 
@@ -1487,7 +1305,6 @@ function addRunDependency(id) {
     Module['monitorRunDependencies'](runDependencies);
   }
 }
-Module["addRunDependency"] = addRunDependency;
 
 function removeRunDependency(id) {
   runDependencies--;
@@ -1506,7 +1323,6 @@ function removeRunDependency(id) {
     }
   }
 }
-Module["removeRunDependency"] = removeRunDependency;
 
 Module["preloadedImages"] = {}; // maps url to image data
 Module["preloadedAudios"] = {}; // maps url to audio data
@@ -1519,87 +1335,72 @@ var memoryInitializer = null;
 
 
 
-function integrateWasmJS(Module) {
+
+// Prefix of data URIs emitted by SINGLE_FILE and related options.
+var dataURIPrefix = 'data:application/octet-stream;base64,';
+
+// Indicates whether filename is a base64 data URI.
+function isDataURI(filename) {
+  return String.prototype.startsWith ?
+      filename.startsWith(dataURIPrefix) :
+      filename.indexOf(dataURIPrefix) === 0;
+}
+
+
+
+
+function integrateWasmJS() {
   // wasm.js has several methods for creating the compiled code module here:
   //  * 'native-wasm' : use native WebAssembly support in the browser
   //  * 'interpret-s-expr': load s-expression code from a .wast and interpret
   //  * 'interpret-binary': load binary wasm and interpret
   //  * 'interpret-asm2wasm': load asm.js code, translate to wasm, and interpret
   //  * 'asmjs': no wasm, just load the asm.js code and use that (good for testing)
-  // The method can be set at compile time (BINARYEN_METHOD), or runtime by setting Module['wasmJSMethod'].
+  // The method is set at compile time (BINARYEN_METHOD)
   // The method can be a comma-separated list, in which case, we will try the
   // options one by one. Some of them can fail gracefully, and then we can try
   // the next.
 
   // inputs
 
-  var method = Module['wasmJSMethod'] || 'native-wasm';
-  Module['wasmJSMethod'] = method;
+  var method = 'native-wasm';
 
-  var wasmTextFile = Module['wasmTextFile'] || 'sql-debug-wasm-raw.wast';
-  var wasmBinaryFile = Module['wasmBinaryFile'] || 'sql-debug-wasm-raw.wasm';
-  var asmjsCodeFile = Module['asmjsCodeFile'] || 'sql-debug-wasm-raw.temp.asm.js';
+  var wasmTextFile = 'sql-debug-wasm-raw.wast';
+  var wasmBinaryFile = 'sql-debug-wasm-raw.wasm';
+  var asmjsCodeFile = 'sql-debug-wasm-raw.temp.asm.js';
 
   if (typeof Module['locateFile'] === 'function') {
-    wasmTextFile = Module['locateFile'](wasmTextFile);
-    wasmBinaryFile = Module['locateFile'](wasmBinaryFile);
-    asmjsCodeFile = Module['locateFile'](asmjsCodeFile);
+    if (!isDataURI(wasmTextFile)) {
+      wasmTextFile = Module['locateFile'](wasmTextFile);
+    }
+    if (!isDataURI(wasmBinaryFile)) {
+      wasmBinaryFile = Module['locateFile'](wasmBinaryFile);
+    }
+    if (!isDataURI(asmjsCodeFile)) {
+      asmjsCodeFile = Module['locateFile'](asmjsCodeFile);
+    }
   }
 
   // utilities
 
   var wasmPageSize = 64*1024;
 
-  var asm2wasmImports = { // special asm2wasm imports
-    "f64-rem": function(x, y) {
-      return x % y;
-    },
-    "f64-to-int": function(x) {
-      return x | 0;
-    },
-    "i32s-div": function(x, y) {
-      return ((x | 0) / (y | 0)) | 0;
-    },
-    "i32u-div": function(x, y) {
-      return ((x >>> 0) / (y >>> 0)) >>> 0;
-    },
-    "i32s-rem": function(x, y) {
-      return ((x | 0) % (y | 0)) | 0;
-    },
-    "i32u-rem": function(x, y) {
-      return ((x >>> 0) % (y >>> 0)) >>> 0;
-    },
-    "debugger": function() {
-      debugger;
-    },
-  };
-
   var info = {
     'global': null,
     'env': null,
-    'asm2wasm': asm2wasmImports,
+    'asm2wasm': { // special asm2wasm imports
+      "f64-rem": function(x, y) {
+        return x % y;
+      },
+      "debugger": function() {
+        debugger;
+      }
+    },
     'parent': Module // Module inside wasm-js.cpp refers to wasm-js.cpp; this allows access to the outside program.
   };
 
   var exports = null;
 
-  function lookupImport(mod, base) {
-    var lookup = info;
-    if (mod.indexOf('.') < 0) {
-      lookup = (lookup || {})[mod];
-    } else {
-      var parts = mod.split('.');
-      lookup = (lookup || {})[parts[0]];
-      lookup = (lookup || {})[parts[1]];
-    }
-    if (base) {
-      lookup = (lookup || {})[base];
-    }
-    if (lookup === undefined) {
-      abort('bad lookupImport to (' + mod + ').' + base);
-    }
-    return lookup;
-  }
 
   function mergeMemory(newBuffer) {
     // The wasm instance creates its memory. But static init code might have written to
@@ -1613,56 +1414,43 @@ function integrateWasmJS(Module) {
     var oldView = new Int8Array(oldBuffer);
     var newView = new Int8Array(newBuffer);
 
-    // If we have a mem init file, do not trample it
-    if (!memoryInitializer) {
-      oldView.set(newView.subarray(Module['STATIC_BASE'], Module['STATIC_BASE'] + Module['STATIC_BUMP']), Module['STATIC_BASE']);
-    }
 
     newView.set(oldView);
     updateGlobalBuffer(newBuffer);
     updateGlobalBufferViews();
   }
 
-  var WasmTypes = {
-    none: 0,
-    i32: 1,
-    i64: 2,
-    f32: 3,
-    f64: 4
-  };
-
   function fixImports(imports) {
-    if (!0) return imports;
-    var ret = {};
-    for (var i in imports) {
-      var fixed = i;
-      if (fixed[0] == '_') fixed = fixed.substr(1);
-      ret[fixed] = imports[i];
-    }
-    return ret;
+    return imports;
   }
 
   function getBinary() {
-    var binary;
-    if (Module['wasmBinary']) {
-      binary = Module['wasmBinary'];
-      binary = new Uint8Array(binary);
-    } else if (Module['readBinary']) {
-      binary = Module['readBinary'](wasmBinaryFile);
-    } else {
-      throw "on the web, we need the wasm binary to be preloaded and set on Module['wasmBinary']. emcc.py will do that for you when generating HTML (but not JS)";
+    try {
+      if (Module['wasmBinary']) {
+        return new Uint8Array(Module['wasmBinary']);
+      }
+      if (Module['readBinary']) {
+        return Module['readBinary'](wasmBinaryFile);
+      } else {
+        throw "on the web, we need the wasm binary to be preloaded and set on Module['wasmBinary']. emcc.py will do that for you when generating HTML (but not JS)";
+      }
     }
-    return binary;
+    catch (err) {
+      abort(err);
+    }
   }
 
   function getBinaryPromise() {
     // if we don't have the binary yet, and have the Fetch api, use that
-    if (!Module['wasmBinary'] && typeof fetch === 'function') {
+    // in some environments, like Electron's render process, Fetch api may be present, but have a different context than expected, let's only use it on the Web
+    if (!Module['wasmBinary'] && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === 'function') {
       return fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function(response) {
         if (!response['ok']) {
           throw "failed to load wasm binary file at '" + wasmBinaryFile + "'";
         }
         return response['arrayBuffer']();
+      }).catch(function () {
+        return getBinary();
       });
     }
     // Otherwise, getBinary should be able to get it synchronously
@@ -1673,23 +1461,6 @@ function integrateWasmJS(Module) {
 
   // do-method functions
 
-  function doJustAsm(global, env, providedBuffer) {
-    // if no Module.asm, or it's the method handler helper (see below), then apply
-    // the asmjs
-    if (typeof Module['asm'] !== 'function' || Module['asm'] === methodHandler) {
-      if (!Module['asmPreload']) {
-        // you can load the .asm.js file before this, to avoid this sync xhr and eval
-        eval(Module['read'](asmjsCodeFile)); // set Module.asm
-      } else {
-        Module['asm'] = Module['asmPreload'];
-      }
-    }
-    if (typeof Module['asm'] !== 'function') {
-      Module['printErr']('asm evalling did not set the module properly');
-      return false;
-    }
-    return Module['asm'](global, env, providedBuffer);
-  }
 
   function doNativeWasm(global, env, providedBuffer) {
     if (typeof WebAssembly !== 'object') {
@@ -1707,19 +1478,18 @@ function integrateWasmJS(Module) {
       'NaN': NaN,
       'Infinity': Infinity
     };
-    info['global.Math'] = global.Math;
+    info['global.Math'] = Math;
     info['env'] = env;
     // handle a generated wasm instance, receiving its exports and
     // performing other necessary setup
-    function receiveInstance(instance) {
+    function receiveInstance(instance, module) {
       exports = instance.exports;
       if (exports.memory) mergeMemory(exports.memory);
       Module['asm'] = exports;
       Module["usingWasm"] = true;
       removeRunDependency('wasm-instantiate');
     }
-
-    addRunDependency('wasm-instantiate'); // we can't run yet
+    addRunDependency('wasm-instantiate');
 
     // User shell pages can write their own Module.instantiateWasm = function(imports, successCallback) callback
     // to manually instantiate the Wasm module themselves. This allows pages to run the instantiation parallel
@@ -1733,83 +1503,39 @@ function integrateWasmJS(Module) {
       }
     }
 
-    getBinaryPromise().then(function(binary) {
-      return WebAssembly.instantiate(binary, info)
-    }).then(function(output) {
+    function receiveInstantiatedSource(output) {
+      // 'output' is a WebAssemblyInstantiatedSource object which has both the module and instance.
       // receiveInstance() will swap in the exports (to Module.asm) so they can be called
-      receiveInstance(output['instance']);
-    }).catch(function(reason) {
-      Module['printErr']('failed to asynchronously prepare wasm: ' + reason);
-      Module['quit'](1, reason);
-    });
+      receiveInstance(output['instance'], output['module']);
+    }
+    function instantiateArrayBuffer(receiver) {
+      getBinaryPromise().then(function(binary) {
+        return WebAssembly.instantiate(binary, info);
+      }).then(receiver).catch(function(reason) {
+        Module['printErr']('failed to asynchronously prepare wasm: ' + reason);
+        abort(reason);
+      });
+    }
+    // Prefer streaming instantiation if available.
+    if (!Module['wasmBinary'] &&
+        typeof WebAssembly.instantiateStreaming === 'function' &&
+        !isDataURI(wasmBinaryFile) &&
+        typeof fetch === 'function') {
+      WebAssembly.instantiateStreaming(fetch(wasmBinaryFile, { credentials: 'same-origin' }), info)
+        .then(receiveInstantiatedSource)
+        .catch(function(reason) {
+          // We expect the most common failure cause to be a bad MIME type for the binary,
+          // in which case falling back to ArrayBuffer instantiation should work.
+          Module['printErr']('wasm streaming compile failed: ' + reason);
+          Module['printErr']('falling back to ArrayBuffer instantiation');
+          instantiateArrayBuffer(receiveInstantiatedSource);
+        });
+    } else {
+      instantiateArrayBuffer(receiveInstantiatedSource);
+    }
     return {}; // no exports yet; we'll fill them in later
   }
 
-  function doWasmPolyfill(global, env, providedBuffer, method) {
-    if (typeof WasmJS !== 'function') {
-      Module['printErr']('WasmJS not detected - polyfill not bundled?');
-      return false;
-    }
-
-    // Use wasm.js to polyfill and execute code in a wasm interpreter.
-    var wasmJS = WasmJS({});
-
-    // XXX don't be confused. Module here is in the outside program. wasmJS is the inner wasm-js.cpp.
-    wasmJS['outside'] = Module; // Inside wasm-js.cpp, Module['outside'] reaches the outside module.
-
-    // Information for the instance of the module.
-    wasmJS['info'] = info;
-
-    wasmJS['lookupImport'] = lookupImport;
-
-    assert(providedBuffer === Module['buffer']); // we should not even need to pass it as a 3rd arg for wasm, but that's the asm.js way.
-
-    info.global = global;
-    info.env = env;
-
-    // polyfill interpreter expects an ArrayBuffer
-    assert(providedBuffer === Module['buffer']);
-    env['memory'] = providedBuffer;
-    assert(env['memory'] instanceof ArrayBuffer);
-
-    wasmJS['providedTotalMemory'] = Module['buffer'].byteLength;
-
-    // Prepare to generate wasm, using either asm2wasm or s-exprs
-    var code;
-    if (method === 'interpret-binary') {
-      code = getBinary();
-    } else {
-      code = Module['read'](method == 'interpret-asm2wasm' ? asmjsCodeFile : wasmTextFile);
-    }
-    var temp;
-    if (method == 'interpret-asm2wasm') {
-      temp = wasmJS['_malloc'](code.length + 1);
-      wasmJS['writeAsciiToMemory'](code, temp);
-      wasmJS['_load_asm2wasm'](temp);
-    } else if (method === 'interpret-s-expr') {
-      temp = wasmJS['_malloc'](code.length + 1);
-      wasmJS['writeAsciiToMemory'](code, temp);
-      wasmJS['_load_s_expr2wasm'](temp);
-    } else if (method === 'interpret-binary') {
-      temp = wasmJS['_malloc'](code.length);
-      wasmJS['HEAPU8'].set(code, temp);
-      wasmJS['_load_binary2wasm'](temp, code.length);
-    } else {
-      throw 'what? ' + method;
-    }
-    wasmJS['_free'](temp);
-
-    wasmJS['_instantiate'](temp);
-
-    if (Module['newBuffer']) {
-      mergeMemory(Module['newBuffer']);
-      Module['newBuffer'] = null;
-    }
-
-    exports = wasmJS['asmExports'];
-
-    return exports;
-  }
 
   // We may have a preloaded value in Module.asm, save it
   Module['asmPreload'] = Module['asm'];
@@ -1836,11 +1562,6 @@ function integrateWasmJS(Module) {
       } catch(e) {
         return null;
       }
-    } else {
-      // wasm interpreter support
-      exports['__growWasmMemory']((size - oldSize) / wasmPageSize); // tiny wasm method that just does grow_memory
-      // in interpreter, we replace Module.buffer if we allocate
-      return Module['buffer'] !== old ? Module['buffer'] : null; // if it was reallocated, it changed
     }
   };
 
@@ -1860,7 +1581,6 @@ function integrateWasmJS(Module) {
   // doesn't need to care that it is wasm or olyfilled wasm or asm.js.
 
   Module['asm'] = function(global, env, providedBuffer) {
-    global = fixImports(global);
     env = fixImports(env);
 
     // import table
@@ -1890,26 +1610,9 @@ function integrateWasmJS(Module) {
     // try the methods. each should return the exports if it succeeded
 
     var exports;
-    var methods = method.split(',');
+    exports = doNativeWasm(global, env, providedBuffer);
 
-    for (var i = 0; i < methods.length; i++) {
-      var curr = methods[i];
-
-
-      finalMethod = curr;
-
-      if (curr === 'native-wasm') {
-        if (exports = doNativeWasm(global, env, providedBuffer)) break;
-      } else if (curr === 'asmjs') {
-        if (exports = doJustAsm(global, env, providedBuffer)) break;
-      } else if (curr === 'interpret-asm2wasm' || curr === 'interpret-s-expr' || curr === 'interpret-binary') {
-        if (exports = doWasmPolyfill(global, env, providedBuffer, curr)) break;
-      } else {
-        throw 'bad method: ' + curr;
-      }
-    }
-
-    if (!exports) throw 'no binaryen method succeeded. consider enabling more options, like interpreting, if you want that: https://github.com/kripken/emscripten/wiki/WebAssembly#binaryen-methods';
+    if (!exports) abort('no binaryen method succeeded. consider enabling more options, like interpreting, if you want that: https://github.com/kripken/emscripten/wiki/WebAssembly#binaryen-methods');
 
 
     return exports;
@@ -1918,7 +1621,7 @@ function integrateWasmJS(Module) {
   var methodHandler = Module['asm']; // note our method handler, as we may modify Module['asm'] later
 }
 
-integrateWasmJS(Module);
+integrateWasmJS();
 
 // === Body ===
 
@@ -1927,13 +1630,13 @@ var ASM_CONSTS = [];
 
 
 
-STATIC_BASE = Runtime.GLOBAL_BASE;
+STATIC_BASE = GLOBAL_BASE;
 
 STATICTOP = STATIC_BASE + 25664;
 /* global initializers */  __ATINIT__.push();
 
 
-memoryInitializer = Module["wasmJSMethod"].indexOf("asmjs") >= 0 || Module["wasmJSMethod"].indexOf("interpret-asm2wasm") >= 0 ? "sql-debug-wasm-raw.js.mem" : null;
+
 
 
 
@@ -1980,17 +1683,10 @@ function copyTempDouble(ptr) {
 // {{PRE_LIBRARY}}
 
 
-  function _sqlite3ExprForVectorField() {
-  Module['printErr']('missing function: sqlite3ExprForVectorField'); abort(-1);
-  }
-
   function ___assert_fail(condition, filename, line, func) {
-      ABORT = true;
-      throw 'Assertion failed: ' + Pointer_stringify(condition) + ', at: ' + [filename ? Pointer_stringify(filename) : 'unknown filename', line, func ? Pointer_stringify(func) : 'unknown function'] + ' at ' + stackTrace();
+      abort('Assertion failed: ' + Pointer_stringify(condition) + ', at: ' + [filename ? Pointer_stringify(filename) : 'unknown filename', line, func ? Pointer_stringify(func) : 'unknown function']);
     }
 
-  
-  var PROCINFO={ppid:1,pid:42,sid:42,pgid:42};
   
   
   
@@ -2023,7 +1719,7 @@ function copyTempDouble(ptr) {
         }
         // if the path is allowed to go above the root, restore leading ..s
         if (allowAboveRoot) {
-          for (; up--; up) {
+          for (; up; up--) {
             parts.unshift('..');
           }
         }
@@ -2707,26 +2403,30 @@ function copyTempDouble(ptr) {
         IDBFS.getDB(mount.mountpoint, function(err, db) {
           if (err) return callback(err);
   
-          var transaction = db.transaction([IDBFS.DB_STORE_NAME], 'readonly');
-          transaction.onerror = function(e) {
-            callback(this.error);
-            e.preventDefault();
-          };
+          try {
+            var transaction = db.transaction([IDBFS.DB_STORE_NAME], 'readonly');
+            transaction.onerror = function(e) {
+              callback(this.error);
+              e.preventDefault();
+            };
   
-          var store = transaction.objectStore(IDBFS.DB_STORE_NAME);
-          var index = store.index('timestamp');
+            var store = transaction.objectStore(IDBFS.DB_STORE_NAME);
+            var index = store.index('timestamp');
   
-          index.openKeyCursor().onsuccess = function(event) {
-            var cursor = event.target.result;
+            index.openKeyCursor().onsuccess = function(event) {
+              var cursor = event.target.result;
   
-            if (!cursor) {
-              return callback(null, { type: 'remote', db: db, entries: entries });
-            }
+              if (!cursor) {
+                return callback(null, { type: 'remote', db: db, entries: entries });
+              }
   
-            entries[cursor.primaryKey] = { timestamp: cursor.key };
+              entries[cursor.primaryKey] = { timestamp: cursor.key };
   
-            cursor.continue();
-          };
+              cursor.continue();
+            };
+          } catch (e) {
+            return callback(e);
+          }
         });
       },loadLocalEntry:function (path, callback) {
         var stat, node;
@@ -3067,31 +2767,23 @@ function copyTempDouble(ptr) {
             throw new FS.ErrnoError(ERRNO_CODES[e.code]);
           }
         },read:function (stream, buffer, offset, length, position) {
-          if (length === 0) return 0; // node errors on 0 length reads
-          // FIXME this is terrible.
-          var nbuffer = new Buffer(length);
-          var res;
+          // Node.js < 6 compatibility: node errors on 0 length reads
+          if (length === 0) return 0;
+          // Node.js < 4.5 compatibility: Buffer.from does not support ArrayBuffer
+          var buf = Buffer.from ? Buffer.from(buffer.buffer) : new Buffer(buffer.buffer);
           try {
-            res = fs.readSync(stream.nfd, nbuffer, 0, length, position);
+            return fs.readSync(stream.nfd, buf, offset, length, position);
           } catch (e) {
             throw new FS.ErrnoError(ERRNO_CODES[e.code]);
           }
-          if (res > 0) {
-            for (var i = 0; i < res; i++) {
-              buffer[offset + i] = nbuffer[i];
-            }
-          }
-          return res;
         },write:function (stream, buffer, offset, length, position) {
-          // FIXME this is terrible.
-          var nbuffer = new Buffer(buffer.subarray(offset, offset + length));
-          var res;
+          // Node.js < 4.5 compatibility: Buffer.from does not support ArrayBuffer
+          var buf = Buffer.from ? Buffer.from(buffer.buffer) : new Buffer(buffer.buffer);
           try {
-            res = fs.writeSync(stream.nfd, nbuffer, 0, length, position);
+            return fs.writeSync(stream.nfd, buf, offset, length, position);
           } catch (e) {
             throw new FS.ErrnoError(ERRNO_CODES[e.code]);
           }
-          return res;
         },llseek:function (stream, offset, whence) {
           var position = offset;
           if (whence === 1) {  // SEEK_CUR.
@@ -4228,7 +3920,7 @@ function copyTempDouble(ptr) {
         if ((stream.flags & 2097155) === 0) {
           throw new FS.ErrnoError(ERRNO_CODES.EBADF);
         }
-        if (!FS.isFile(stream.node.mode) && !FS.isDir(node.mode)) {
+        if (!FS.isFile(stream.node.mode) && !FS.isDir(stream.node.mode)) {
           throw new FS.ErrnoError(ERRNO_CODES.ENODEV);
         }
         if (!stream.stream_ops.allocate) {
@@ -4335,7 +4027,7 @@ function copyTempDouble(ptr) {
           random_device = function() { crypto.getRandomValues(randomBuffer); return randomBuffer[0]; };
         } else if (ENVIRONMENT_IS_NODE) {
           // for nodejs
-          random_device = function() { return require('crypto').randomBytes(1)[0]; };
+          random_device = function() { return require('crypto')['randomBytes'](1)[0]; };
         } else {
           // default for ES5 platforms
           random_device = function() { return (Math.random()*256)|0; };
@@ -4421,6 +4113,8 @@ function copyTempDouble(ptr) {
           };
           this.setErrno(errno);
           this.message = ERRNO_MESSAGES[errno];
+          // Node.js compatibility: assigning on this.stack fails on Node 4 (but fixed on Node 8)
+          if (this.stack) Object.defineProperty(this, "stack", { value: (new Error).stack, writable: true });
         };
         FS.ErrnoError.prototype = new Error();
         FS.ErrnoError.prototype.constructor = FS.ErrnoError;
@@ -5051,20 +4745,7 @@ function copyTempDouble(ptr) {
         return low;
       },getZero:function () {
         assert(SYSCALLS.get() === 0);
-      }};function ___syscall20(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // getpid
-      return PROCINFO.pid;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-   
-  Module["_memset"] = _memset;
-
-  function ___syscall10(which, varargs) {SYSCALLS.varargs = varargs;
+      }};function ___syscall10(which, varargs) {SYSCALLS.varargs = varargs;
   try {
    // unlink
       var path = SYSCALLS.getStr();
@@ -5076,15 +4757,55 @@ function copyTempDouble(ptr) {
   }
   }
 
-  function _abort() {
-      Module['abort']();
-    }
-
-  function ___syscall195(which, varargs) {SYSCALLS.varargs = varargs;
+  function ___syscall118(which, varargs) {SYSCALLS.varargs = varargs;
   try {
-   // SYS_stat64
-      var path = SYSCALLS.getStr(), buf = SYSCALLS.get();
-      return SYSCALLS.doStat(FS.stat, path, buf);
+   // fsync
+      var stream = SYSCALLS.getStreamFromFD();
+      return 0; // we can't do anything synchronously; the in-memory FS is already synced to
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall140(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // llseek
+      var stream = SYSCALLS.getStreamFromFD(), offset_high = SYSCALLS.get(), offset_low = SYSCALLS.get(), result = SYSCALLS.get(), whence = SYSCALLS.get();
+      // NOTE: offset_high is unused - Emscripten's off_t is 32-bit
+      var offset = offset_low;
+      FS.llseek(stream, offset, whence);
+      HEAP32[((result)>>2)]=stream.position;
+      if (stream.getdents && offset === 0 && whence === 0) stream.getdents = null; // reset readdir state
+      return 0;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall15(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // chmod
+      var path = SYSCALLS.getStr(), mode = SYSCALLS.get();
+      FS.chmod(path, mode);
+      return 0;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall183(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // getcwd
+      var buf = SYSCALLS.get(), size = SYSCALLS.get();
+      if (size === 0) return -ERRNO_CODES.EINVAL;
+      var cwd = FS.cwd();
+      var cwdLengthInBytes = lengthBytesUTF8(cwd);
+      if (size < cwdLengthInBytes + 1) return -ERRNO_CODES.ERANGE;
+      stringToUTF8(cwd, buf, size);
+      return buf;
     } catch (e) {
     if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
     return -e.errno;
@@ -5103,11 +4824,11 @@ function copyTempDouble(ptr) {
   }
   }
 
-  function ___syscall197(which, varargs) {SYSCALLS.varargs = varargs;
+  function ___syscall195(which, varargs) {SYSCALLS.varargs = varargs;
   try {
-   // SYS_fstat64
-      var stream = SYSCALLS.getStreamFromFD(), buf = SYSCALLS.get();
-      return SYSCALLS.doStat(FS.stat, stream.path, buf);
+   // SYS_stat64
+      var path = SYSCALLS.getStr(), buf = SYSCALLS.get();
+      return SYSCALLS.doStat(FS.stat, path, buf);
     } catch (e) {
     if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
     return -e.errno;
@@ -5125,22 +4846,59 @@ function copyTempDouble(ptr) {
   }
   }
 
-  function ___syscall118(which, varargs) {SYSCALLS.varargs = varargs;
+  function ___syscall197(which, varargs) {SYSCALLS.varargs = varargs;
   try {
-   // fsync
-      var stream = SYSCALLS.getStreamFromFD();
-      return 0; // we can't do anything synchronously; the in-memory FS is already synced to
+   // SYS_fstat64
+      var stream = SYSCALLS.getStreamFromFD(), buf = SYSCALLS.get();
+      return SYSCALLS.doStat(FS.stat, stream.path, buf);
     } catch (e) {
     if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
     return -e.errno;
   }
   }
 
-  function ___syscall33(which, varargs) {SYSCALLS.varargs = varargs;
+  
+  var PROCINFO={ppid:1,pid:42,sid:42,pgid:42};function ___syscall20(which, varargs) {SYSCALLS.varargs = varargs;
   try {
-   // access
-      var path = SYSCALLS.getStr(), amode = SYSCALLS.get();
-      return SYSCALLS.doAccess(path, amode);
+   // getpid
+      return PROCINFO.pid;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  
+  function ___syscall202(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // getgid32
+      return 0;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }function ___syscall201() {
+  return ___syscall202.apply(null, arguments)
+  }
+
+  function ___syscall207(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // fchown32
+      var fd = SYSCALLS.get(), owner = SYSCALLS.get(), group = SYSCALLS.get();
+      FS.fchown(fd, owner, group);
+      return 0;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall212(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // chown32
+      var path = SYSCALLS.getStr(), owner = SYSCALLS.get(), group = SYSCALLS.get();
+      FS.chown(path, owner, group);
+      return 0;
     } catch (e) {
     if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
     return -e.errno;
@@ -5201,45 +4959,95 @@ function copyTempDouble(ptr) {
   }
   }
 
-  
-  function _usleep(useconds) {
-      // int usleep(useconds_t useconds);
-      // http://pubs.opengroup.org/onlinepubs/000095399/functions/usleep.html
-      // We're single-threaded, so use a busy loop. Super-ugly.
-      var msec = useconds / 1000;
-      if ((ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && self['performance'] && self['performance']['now']) {
-        var start = self['performance']['now']();
-        while (self['performance']['now']() - start < msec) {
-          // Do nothing.
-        }
-      } else {
-        var start = Date.now();
-        while (Date.now() - start < msec) {
-          // Do nothing.
-        }
-      }
+  function ___syscall3(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // read
+      var stream = SYSCALLS.getStreamFromFD(), buf = SYSCALLS.get(), count = SYSCALLS.get();
+      return FS.read(stream, HEAP8,buf, count);
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall33(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // access
+      var path = SYSCALLS.getStr(), amode = SYSCALLS.get();
+      return SYSCALLS.doAccess(path, amode);
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall39(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // mkdir
+      var path = SYSCALLS.getStr(), mode = SYSCALLS.get();
+      return SYSCALLS.doMkdir(path, mode);
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall4(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // write
+      var stream = SYSCALLS.getStreamFromFD(), buf = SYSCALLS.get(), count = SYSCALLS.get();
+      return FS.write(stream, HEAP8,buf, count);
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall40(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // rmdir
+      var path = SYSCALLS.getStr();
+      FS.rmdir(path);
       return 0;
-    }
-  Module["_usleep"] = _usleep;function _nanosleep(rqtp, rmtp) {
-      // int nanosleep(const struct timespec  *rqtp, struct timespec *rmtp);
-      var seconds = HEAP32[((rqtp)>>2)];
-      var nanoseconds = HEAP32[(((rqtp)+(4))>>2)];
-      if (rmtp !== 0) {
-        HEAP32[((rmtp)>>2)]=0;
-        HEAP32[(((rmtp)+(4))>>2)]=0;
-      }
-      return _usleep((seconds * 1e6) + (nanoseconds / 1000));
-    }
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
 
-  
-  function _emscripten_memcpy_big(dest, src, num) {
-      HEAPU8.set(HEAPU8.subarray(src, src+num), dest);
-      return dest;
-    } 
-  Module["_memcpy"] = _memcpy;
+  function ___syscall5(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // open
+      var pathname = SYSCALLS.getStr(), flags = SYSCALLS.get(), mode = SYSCALLS.get() // optional TODO
+      var stream = FS.open(pathname, flags, mode);
+      return stream.fd;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
 
-  function _sqlite3VectorFieldSubexpr() {
-  Module['printErr']('missing function: sqlite3VectorFieldSubexpr'); abort(-1);
+  function ___syscall6(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // close
+      var stream = SYSCALLS.getStreamFromFD();
+      FS.close(stream);
+      return 0;
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
+  function ___syscall85(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // readlink
+      var path = SYSCALLS.getStr(), buf = SYSCALLS.get(), bufsize = SYSCALLS.get();
+      return SYSCALLS.doReadlink(path, buf, bufsize);
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
   }
 
   function ___syscall94(which, varargs) {SYSCALLS.varargs = varargs;
@@ -5254,71 +5062,8 @@ function copyTempDouble(ptr) {
   }
   }
 
-  function _sqlite3CodeSubselect() {
-  Module['printErr']('missing function: sqlite3CodeSubselect'); abort(-1);
-  }
-
-  function ___syscall212(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // chown32
-      var path = SYSCALLS.getStr(), owner = SYSCALLS.get(), group = SYSCALLS.get();
-      FS.chown(path, owner, group);
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-   
-  Module["_llvm_bswap_i32"] = _llvm_bswap_i32;
-
-  function ___syscall39(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // mkdir
-      var path = SYSCALLS.getStr(), mode = SYSCALLS.get();
-      return SYSCALLS.doMkdir(path, mode);
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function ___syscall15(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // chmod
-      var path = SYSCALLS.getStr(), mode = SYSCALLS.get();
-      FS.chmod(path, mode);
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  
-  var ___tm_current=STATICTOP; STATICTOP += 48;;
-  
-  
-  var ___tm_timezone=allocate(intArrayFromString("GMT"), "i8", ALLOC_STATIC);function _gmtime_r(time, tmPtr) {
-      var date = new Date(HEAP32[((time)>>2)]*1000);
-      HEAP32[((tmPtr)>>2)]=date.getUTCSeconds();
-      HEAP32[(((tmPtr)+(4))>>2)]=date.getUTCMinutes();
-      HEAP32[(((tmPtr)+(8))>>2)]=date.getUTCHours();
-      HEAP32[(((tmPtr)+(12))>>2)]=date.getUTCDate();
-      HEAP32[(((tmPtr)+(16))>>2)]=date.getUTCMonth();
-      HEAP32[(((tmPtr)+(20))>>2)]=date.getUTCFullYear()-1900;
-      HEAP32[(((tmPtr)+(24))>>2)]=date.getUTCDay();
-      HEAP32[(((tmPtr)+(36))>>2)]=0;
-      HEAP32[(((tmPtr)+(32))>>2)]=0;
-      var start = Date.UTC(date.getUTCFullYear(), 0, 1, 0, 0, 0, 0);
-      var yday = ((date.getTime() - start) / (1000 * 60 * 60 * 24))|0;
-      HEAP32[(((tmPtr)+(28))>>2)]=yday;
-      HEAP32[(((tmPtr)+(40))>>2)]=___tm_timezone;
-  
-      return tmPtr;
-    }function _gmtime(time) {
-      return _gmtime_r(time, ___tm_current);
+  function _abort() {
+      Module['abort']();
     }
 
   
@@ -5340,12 +5085,11 @@ function copyTempDouble(ptr) {
         ENV['PATH'] = '/';
         ENV['PWD'] = '/';
         ENV['HOME'] = '/home/web_user';
-        ENV['LANG'] = 'C';
+        ENV['LANG'] = 'C.UTF-8';
         ENV['_'] = Module['thisProgram'];
         // Allocate memory.
-        poolPtr = allocate(TOTAL_ENV_SIZE, 'i8', ALLOC_STATIC);
-        envPtr = allocate(MAX_ENV_VALUES * 4,
-                          'i8*', ALLOC_STATIC);
+        poolPtr = staticAlloc(TOTAL_ENV_SIZE);
+        envPtr = staticAlloc(MAX_ENV_VALUES * 4);
         HEAP32[((envPtr)>>2)]=poolPtr;
         HEAP32[((_environ)>>2)]=envPtr;
       } else {
@@ -5384,7 +5128,7 @@ function copyTempDouble(ptr) {
       if (!ENV.hasOwnProperty(name)) return 0;
   
       if (_getenv.ret) _free(_getenv.ret);
-      _getenv.ret = allocate(intArrayFromString(ENV[name]), 'i8', ALLOC_NORMAL);
+      _getenv.ret = allocateUTF8(ENV[name]);
       return _getenv.ret;
     }
 
@@ -5395,166 +5139,88 @@ function copyTempDouble(ptr) {
       return 0;
     }
 
-  function ___syscall183(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // getcwd
-      var buf = SYSCALLS.get(), size = SYSCALLS.get();
-      if (size === 0) return -ERRNO_CODES.EINVAL;
-      var cwd = FS.cwd();
-      if (size < cwd.length + 1) return -ERRNO_CODES.ERANGE;
-      writeAsciiToMemory(cwd, buf);
-      return buf;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
+  
+  var ___tm_current=STATICTOP; STATICTOP += 48;;
+  
+  
+  var ___tm_timezone=allocate(intArrayFromString("GMT"), "i8", ALLOC_STATIC);function _gmtime_r(time, tmPtr) {
+      var date = new Date(HEAP32[((time)>>2)]*1000);
+      HEAP32[((tmPtr)>>2)]=date.getUTCSeconds();
+      HEAP32[(((tmPtr)+(4))>>2)]=date.getUTCMinutes();
+      HEAP32[(((tmPtr)+(8))>>2)]=date.getUTCHours();
+      HEAP32[(((tmPtr)+(12))>>2)]=date.getUTCDate();
+      HEAP32[(((tmPtr)+(16))>>2)]=date.getUTCMonth();
+      HEAP32[(((tmPtr)+(20))>>2)]=date.getUTCFullYear()-1900;
+      HEAP32[(((tmPtr)+(24))>>2)]=date.getUTCDay();
+      HEAP32[(((tmPtr)+(36))>>2)]=0;
+      HEAP32[(((tmPtr)+(32))>>2)]=0;
+      var start = Date.UTC(date.getUTCFullYear(), 0, 1, 0, 0, 0, 0);
+      var yday = ((date.getTime() - start) / (1000 * 60 * 60 * 24))|0;
+      HEAP32[(((tmPtr)+(28))>>2)]=yday;
+      HEAP32[(((tmPtr)+(40))>>2)]=___tm_timezone;
+  
+      return tmPtr;
+    }function _gmtime(time) {
+      return _gmtime_r(time, ___tm_current);
+    }
 
-  function ___syscall3(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // read
-      var stream = SYSCALLS.getStreamFromFD(), buf = SYSCALLS.get(), count = SYSCALLS.get();
-      return FS.read(stream, HEAP8,buf, count);
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function ___syscall5(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // open
-      var pathname = SYSCALLS.getStr(), flags = SYSCALLS.get(), mode = SYSCALLS.get() // optional TODO
-      var stream = FS.open(pathname, flags, mode);
-      return stream.fd;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function ___syscall4(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // write
-      var stream = SYSCALLS.getStreamFromFD(), buf = SYSCALLS.get(), count = SYSCALLS.get();
-      return FS.write(stream, HEAP8,buf, count);
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function ___syscall6(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // close
-      var stream = SYSCALLS.getStreamFromFD();
-      FS.close(stream);
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
+   
 
   var _llvm_pow_f64=Math_pow;
 
-   
-  Module["_sbrk"] = _sbrk;
+  
+  function _emscripten_memcpy_big(dest, src, num) {
+      HEAPU8.set(HEAPU8.subarray(src, src+num), dest);
+      return dest;
+    } 
 
    
-  Module["_memmove"] = _memmove;
 
-  function ___syscall85(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // readlink
-      var path = SYSCALLS.getStr(), buf = SYSCALLS.get(), bufsize = SYSCALLS.get();
-      return SYSCALLS.doReadlink(path, buf, bufsize);
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function ___syscall207(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // fchown32
-      var fd = SYSCALLS.get(), owner = SYSCALLS.get(), group = SYSCALLS.get();
-      FS.fchown(fd, owner, group);
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
+   
 
   
-  function ___syscall202(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // getgid32
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }function ___syscall201() {
-  return ___syscall202.apply(null, arguments)
-  }
-
-  function ___syscall40(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // rmdir
-      var path = SYSCALLS.getStr();
-      FS.rmdir(path);
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function _time(ptr) {
-      var ret = (Date.now()/1000)|0;
-      if (ptr) {
-        HEAP32[((ptr)>>2)]=ret;
-      }
-      return ret;
-    }
-
-  function ___syscall140(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // llseek
-      var stream = SYSCALLS.getStreamFromFD(), offset_high = SYSCALLS.get(), offset_low = SYSCALLS.get(), result = SYSCALLS.get(), whence = SYSCALLS.get();
-      // NOTE: offset_high is unused - Emscripten's off_t is 32-bit
-      var offset = offset_low;
-      FS.llseek(stream, offset, whence);
-      HEAP32[((result)>>2)]=stream.position;
-      if (stream.getdents && offset === 0 && whence === 0) stream.getdents = null; // reset readdir state
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return -e.errno;
-  }
-  }
-
-  function _utimes(path, times) {
-      var time;
-      if (times) {
-        var offset = 8 + 0;
-        time = HEAP32[(((times)+(offset))>>2)] * 1000;
-        offset = 8 + 4;
-        time += HEAP32[(((times)+(offset))>>2)] / 1000;
+  function _usleep(useconds) {
+      // int usleep(useconds_t useconds);
+      // http://pubs.opengroup.org/onlinepubs/000095399/functions/usleep.html
+      // We're single-threaded, so use a busy loop. Super-ugly.
+      var msec = useconds / 1000;
+      if ((ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && self['performance'] && self['performance']['now']) {
+        var start = self['performance']['now']();
+        while (self['performance']['now']() - start < msec) {
+          // Do nothing.
+        }
       } else {
-        time = Date.now();
+        var start = Date.now();
+        while (Date.now() - start < msec) {
+          // Do nothing.
+        }
       }
-      path = Pointer_stringify(path);
-      try {
-        FS.utime(path, time, time);
-        return 0;
-      } catch (e) {
-        FS.handleFSError(e);
-        return -1;
-      }
+      return 0;
     }
+  Module["_usleep"] = _usleep;function _nanosleep(rqtp, rmtp) {
+      // int nanosleep(const struct timespec  *rqtp, struct timespec *rmtp);
+      var seconds = HEAP32[((rqtp)>>2)];
+      var nanoseconds = HEAP32[(((rqtp)+(4))>>2)];
+      if (rmtp !== 0) {
+        HEAP32[((rmtp)>>2)]=0;
+        HEAP32[(((rmtp)+(4))>>2)]=0;
+      }
+      return _usleep((seconds * 1e6) + (nanoseconds / 1000));
+    }
+
+   
+
+  function _sqlite3CodeSubselect() {
+  Module['printErr']('missing function: sqlite3CodeSubselect'); abort(-1);
+  }
+
+  function _sqlite3ExprForVectorField() {
+  Module['printErr']('missing function: sqlite3ExprForVectorField'); abort(-1);
+  }
+
+  function _sqlite3VectorFieldSubexpr() {
+  Module['printErr']('missing function: sqlite3VectorFieldSubexpr'); abort(-1);
+  }
 
   
   function __isLeapYear(year) {
@@ -5894,65 +5560,81 @@ function copyTempDouble(ptr) {
       writeArrayToMemory(bytes, s);
       return bytes.length-1;
     }
-FS.staticInit();__ATINIT__.unshift(function() { if (!Module["noFSInit"] && !FS.init.initialized) FS.init() });__ATMAIN__.push(function() { FS.ignorePermissions = false });__ATEXIT__.push(function() { FS.quit() });Module["FS_createFolder"] = FS.createFolder;Module["FS_createPath"] = FS.createPath;Module["FS_createDataFile"] = FS.createDataFile;Module["FS_createPreloadedFile"] = FS.createPreloadedFile;Module["FS_createLazyFile"] = FS.createLazyFile;Module["FS_createLink"] = FS.createLink;Module["FS_createDevice"] = FS.createDevice;Module["FS_unlink"] = FS.unlink;;
+
+  function _time(ptr) {
+      var ret = (Date.now()/1000)|0;
+      if (ptr) {
+        HEAP32[((ptr)>>2)]=ret;
+      }
+      return ret;
+    }
+
+  function _utimes(path, times) {
+      var time;
+      if (times) {
+        var offset = 8 + 0;
+        time = HEAP32[(((times)+(offset))>>2)] * 1000;
+        offset = 8 + 4;
+        time += HEAP32[(((times)+(offset))>>2)] / 1000;
+      } else {
+        time = Date.now();
+      }
+      path = Pointer_stringify(path);
+      try {
+        FS.utime(path, time, time);
+        return 0;
+      } catch (e) {
+        FS.handleFSError(e);
+        return -1;
+      }
+    }
+FS.staticInit();__ATINIT__.unshift(function() { if (!Module["noFSInit"] && !FS.init.initialized) FS.init() });__ATMAIN__.push(function() { FS.ignorePermissions = false });__ATEXIT__.push(function() { FS.quit() });;
 __ATINIT__.unshift(function() { TTY.init() });__ATEXIT__.push(function() { TTY.shutdown() });;
 if (ENVIRONMENT_IS_NODE) { var fs = require("fs"); var NODEJS_PATH = require("path"); NODEFS.staticInit(); };
 ___buildEnvironment(ENV);;
-DYNAMICTOP_PTR = allocate(1, "i32", ALLOC_STATIC);
+DYNAMICTOP_PTR = staticAlloc(4);
 
-STACK_BASE = STACKTOP = Runtime.alignMemory(STATICTOP);
+STACK_BASE = STACKTOP = alignMemory(STATICTOP);
 
 STACK_MAX = STACK_BASE + TOTAL_STACK;
 
-DYNAMIC_BASE = Runtime.alignMemory(STACK_MAX);
+DYNAMIC_BASE = alignMemory(STACK_MAX);
 
 HEAP32[DYNAMICTOP_PTR>>2] = DYNAMIC_BASE;
 
 staticSealed = true; // seal the static portion of memory
 
+var ASSERTIONS = false;
+
+/** @type {function(string, boolean=, number=)} */
+function intArrayFromString(stringy, dontAddNull, length) {
+  var len = length > 0 ? length : lengthBytesUTF8(stringy)+1;
+  var u8array = new Array(len);
+  var numBytesWritten = stringToUTF8Array(stringy, u8array, 0, u8array.length);
+  if (dontAddNull) u8array.length = numBytesWritten;
+  return u8array;
+}
+
+function intArrayToString(array) {
+  var ret = [];
+  for (var i = 0; i < array.length; i++) {
+    var chr = array[i];
+    if (chr > 0xFF) {
+      if (ASSERTIONS) {
+        assert(false, 'Character code ' + chr + ' (' + String.fromCharCode(chr) + ')  at offset ' + i + ' not in 0x00-0xFF.');
+      }
+      chr &= 0xFF;
+    }
+    ret.push(String.fromCharCode(chr));
+  }
+  return ret.join('');
+}
+
+
 
 Module['wasmTableSize'] = 4352;
 
 Module['wasmMaxTableSize'] = 4352;
-
-function invoke_iiii(index,a1,a2,a3) {
-  try {
-    return Module["dynCall_iiii"](index,a1,a2,a3);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_iiii(index,a1,a2,a3) {
-    return Runtime.functionPointers[index](a1,a2,a3);
-}
-
-function invoke_viiiij(index,a1,a2,a3,a4,a5,a6) {
-  try {
-    Module["dynCall_viiiij"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_viiiij(index,a1,a2,a3,a4,a5) {
-    Runtime.functionPointers[index](a1,a2,a3,a4,a5);
-}
-
-function invoke_viiii(index,a1,a2,a3,a4) {
-  try {
-    Module["dynCall_viiii"](index,a1,a2,a3,a4);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_viiii(index,a1,a2,a3,a4) {
-    Runtime.functionPointers[index](a1,a2,a3,a4);
-}
 
 function invoke_i(index) {
   try {
@@ -5964,59 +5646,7 @@ function invoke_i(index) {
 }
 
 function jsCall_i(index) {
-    return Runtime.functionPointers[index]();
-}
-
-function invoke_vi(index,a1) {
-  try {
-    Module["dynCall_vi"](index,a1);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_vi(index,a1) {
-    Runtime.functionPointers[index](a1);
-}
-
-function invoke_viji(index,a1,a2,a3,a4) {
-  try {
-    Module["dynCall_viji"](index,a1,a2,a3,a4);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_viji(index,a1,a2,a3) {
-    Runtime.functionPointers[index](a1,a2,a3);
-}
-
-function invoke_vii(index,a1,a2) {
-  try {
-    Module["dynCall_vii"](index,a1,a2);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_vii(index,a1,a2) {
-    Runtime.functionPointers[index](a1,a2);
-}
-
-function invoke_iiiiiii(index,a1,a2,a3,a4,a5,a6) {
-  try {
-    return Module["dynCall_iiiiiii"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_iiiiiii(index,a1,a2,a3,a4,a5,a6) {
-    return Runtime.functionPointers[index](a1,a2,a3,a4,a5,a6);
+    return functionPointers[index]();
 }
 
 function invoke_ii(index,a1) {
@@ -6029,72 +5659,7 @@ function invoke_ii(index,a1) {
 }
 
 function jsCall_ii(index,a1) {
-    return Runtime.functionPointers[index](a1);
-}
-
-function invoke_iiiij(index,a1,a2,a3,a4,a5) {
-  try {
-    return Module["dynCall_iiiij"](index,a1,a2,a3,a4,a5);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_iiiij(index,a1,a2,a3,a4) {
-    return Runtime.functionPointers[index](a1,a2,a3,a4);
-}
-
-function invoke_viii(index,a1,a2,a3) {
-  try {
-    Module["dynCall_viii"](index,a1,a2,a3);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_viii(index,a1,a2,a3) {
-    Runtime.functionPointers[index](a1,a2,a3);
-}
-
-function invoke_iiji(index,a1,a2,a3,a4) {
-  try {
-    return Module["dynCall_iiji"](index,a1,a2,a3,a4);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_iiji(index,a1,a2,a3) {
-    return Runtime.functionPointers[index](a1,a2,a3);
-}
-
-function invoke_iiiii(index,a1,a2,a3,a4) {
-  try {
-    return Module["dynCall_iiiii"](index,a1,a2,a3,a4);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_iiiii(index,a1,a2,a3,a4) {
-    return Runtime.functionPointers[index](a1,a2,a3,a4);
-}
-
-function invoke_iijii(index,a1,a2,a3,a4,a5) {
-  try {
-    return Module["dynCall_iijii"](index,a1,a2,a3,a4,a5);
-  } catch(e) {
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function jsCall_iijii(index,a1,a2,a3,a4) {
-    return Runtime.functionPointers[index](a1,a2,a3,a4);
+    return functionPointers[index](a1);
 }
 
 function invoke_iii(index,a1,a2) {
@@ -6107,7 +5672,33 @@ function invoke_iii(index,a1,a2) {
 }
 
 function jsCall_iii(index,a1,a2) {
-    return Runtime.functionPointers[index](a1,a2);
+    return functionPointers[index](a1,a2);
+}
+
+function invoke_iiii(index,a1,a2,a3) {
+  try {
+    return Module["dynCall_iiii"](index,a1,a2,a3);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_iiii(index,a1,a2,a3) {
+    return functionPointers[index](a1,a2,a3);
+}
+
+function invoke_iiiii(index,a1,a2,a3,a4) {
+  try {
+    return Module["dynCall_iiiii"](index,a1,a2,a3,a4);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_iiiii(index,a1,a2,a3,a4) {
+    return functionPointers[index](a1,a2,a3,a4);
 }
 
 function invoke_iiiiii(index,a1,a2,a3,a4,a5) {
@@ -6120,7 +5711,33 @@ function invoke_iiiiii(index,a1,a2,a3,a4,a5) {
 }
 
 function jsCall_iiiiii(index,a1,a2,a3,a4,a5) {
-    return Runtime.functionPointers[index](a1,a2,a3,a4,a5);
+    return functionPointers[index](a1,a2,a3,a4,a5);
+}
+
+function invoke_iiiiiii(index,a1,a2,a3,a4,a5,a6) {
+  try {
+    return Module["dynCall_iiiiiii"](index,a1,a2,a3,a4,a5,a6);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_iiiiiii(index,a1,a2,a3,a4,a5,a6) {
+    return functionPointers[index](a1,a2,a3,a4,a5,a6);
+}
+
+function invoke_iiiij(index,a1,a2,a3,a4,a5) {
+  try {
+    return Module["dynCall_iiiij"](index,a1,a2,a3,a4,a5);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_iiiij(index,a1,a2,a3,a4) {
+    return functionPointers[index](a1,a2,a3,a4);
 }
 
 function invoke_iij(index,a1,a2,a3) {
@@ -6133,92 +5750,190 @@ function invoke_iij(index,a1,a2,a3) {
 }
 
 function jsCall_iij(index,a1,a2) {
-    return Runtime.functionPointers[index](a1,a2);
+    return functionPointers[index](a1,a2);
 }
 
-Module.asmGlobalArg = { "Math": Math, "Int8Array": Int8Array, "Int16Array": Int16Array, "Int32Array": Int32Array, "Uint8Array": Uint8Array, "Uint16Array": Uint16Array, "Uint32Array": Uint32Array, "Float32Array": Float32Array, "Float64Array": Float64Array, "NaN": NaN, "Infinity": Infinity };
+function invoke_iiji(index,a1,a2,a3,a4) {
+  try {
+    return Module["dynCall_iiji"](index,a1,a2,a3,a4);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
 
-Module.asmLibraryArg = { "abort": abort, "assert": assert, "enlargeMemory": enlargeMemory, "getTotalMemory": getTotalMemory, "abortOnCannotGrowMemory": abortOnCannotGrowMemory, "invoke_iiii": invoke_iiii, "jsCall_iiii": jsCall_iiii, "invoke_viiiij": invoke_viiiij, "jsCall_viiiij": jsCall_viiiij, "invoke_viiii": invoke_viiii, "jsCall_viiii": jsCall_viiii, "invoke_i": invoke_i, "jsCall_i": jsCall_i, "invoke_vi": invoke_vi, "jsCall_vi": jsCall_vi, "invoke_viji": invoke_viji, "jsCall_viji": jsCall_viji, "invoke_vii": invoke_vii, "jsCall_vii": jsCall_vii, "invoke_iiiiiii": invoke_iiiiiii, "jsCall_iiiiiii": jsCall_iiiiiii, "invoke_ii": invoke_ii, "jsCall_ii": jsCall_ii, "invoke_iiiij": invoke_iiiij, "jsCall_iiiij": jsCall_iiiij, "invoke_viii": invoke_viii, "jsCall_viii": jsCall_viii, "invoke_iiji": invoke_iiji, "jsCall_iiji": jsCall_iiji, "invoke_iiiii": invoke_iiiii, "jsCall_iiiii": jsCall_iiiii, "invoke_iijii": invoke_iijii, "jsCall_iijii": jsCall_iijii, "invoke_iii": invoke_iii, "jsCall_iii": jsCall_iii, "invoke_iiiiii": invoke_iiiiii, "jsCall_iiiiii": jsCall_iiiiii, "invoke_iij": invoke_iij, "jsCall_iij": jsCall_iij, "___syscall221": ___syscall221, "___syscall85": ___syscall85, "_utimes": _utimes, "_llvm_pow_f64": _llvm_pow_f64, "_abort": _abort, "___syscall40": ___syscall40, "___syscall118": ___syscall118, "_nanosleep": _nanosleep, "___syscall20": ___syscall20, "___syscall183": ___syscall183, "___assert_fail": ___assert_fail, "_usleep": _usleep, "___buildEnvironment": ___buildEnvironment, "__addDays": __addDays, "_sqlite3CodeSubselect": _sqlite3CodeSubselect, "___setErrNo": ___setErrNo, "___syscall197": ___syscall197, "___syscall196": ___syscall196, "___syscall195": ___syscall195, "___syscall194": ___syscall194, "_sqlite3ExprForVectorField": _sqlite3ExprForVectorField, "___syscall212": ___syscall212, "_strftime": _strftime, "___syscall94": ___syscall94, "__arraySum": __arraySum, "_emscripten_memcpy_big": _emscripten_memcpy_big, "_gmtime": _gmtime, "_getenv": _getenv, "___syscall33": ___syscall33, "___syscall15": ___syscall15, "__isLeapYear": __isLeapYear, "___syscall39": ___syscall39, "_sqlite3VectorFieldSubexpr": _sqlite3VectorFieldSubexpr, "___syscall10": ___syscall10, "_gmtime_r": _gmtime_r, "___syscall3": ___syscall3, "___syscall202": ___syscall202, "___syscall6": ___syscall6, "___syscall5": ___syscall5, "___syscall4": ___syscall4, "_time": _time, "_gettimeofday": _gettimeofday, "___syscall140": ___syscall140, "___syscall207": ___syscall207, "___syscall201": ___syscall201, "DYNAMICTOP_PTR": DYNAMICTOP_PTR, "tempDoublePtr": tempDoublePtr, "ABORT": ABORT, "STACKTOP": STACKTOP, "STACK_MAX": STACK_MAX };
+function jsCall_iiji(index,a1,a2,a3) {
+    return functionPointers[index](a1,a2,a3);
+}
+
+function invoke_iijii(index,a1,a2,a3,a4,a5) {
+  try {
+    return Module["dynCall_iijii"](index,a1,a2,a3,a4,a5);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_iijii(index,a1,a2,a3,a4) {
+    return functionPointers[index](a1,a2,a3,a4);
+}
+
+function invoke_vi(index,a1) {
+  try {
+    Module["dynCall_vi"](index,a1);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_vi(index,a1) {
+    functionPointers[index](a1);
+}
+
+function invoke_vii(index,a1,a2) {
+  try {
+    Module["dynCall_vii"](index,a1,a2);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_vii(index,a1,a2) {
+    functionPointers[index](a1,a2);
+}
+
+function invoke_viii(index,a1,a2,a3) {
+  try {
+    Module["dynCall_viii"](index,a1,a2,a3);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_viii(index,a1,a2,a3) {
+    functionPointers[index](a1,a2,a3);
+}
+
+function invoke_viiii(index,a1,a2,a3,a4) {
+  try {
+    Module["dynCall_viiii"](index,a1,a2,a3,a4);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_viiii(index,a1,a2,a3,a4) {
+    functionPointers[index](a1,a2,a3,a4);
+}
+
+function invoke_viiiij(index,a1,a2,a3,a4,a5,a6) {
+  try {
+    Module["dynCall_viiiij"](index,a1,a2,a3,a4,a5,a6);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_viiiij(index,a1,a2,a3,a4,a5) {
+    functionPointers[index](a1,a2,a3,a4,a5);
+}
+
+function invoke_viji(index,a1,a2,a3,a4) {
+  try {
+    Module["dynCall_viji"](index,a1,a2,a3,a4);
+  } catch(e) {
+    if (typeof e !== 'number' && e !== 'longjmp') throw e;
+    Module["setThrew"](1, 0);
+  }
+}
+
+function jsCall_viji(index,a1,a2,a3) {
+    functionPointers[index](a1,a2,a3);
+}
+
+Module.asmGlobalArg = {};
+
+Module.asmLibraryArg = { "abort": abort, "assert": assert, "enlargeMemory": enlargeMemory, "getTotalMemory": getTotalMemory, "abortOnCannotGrowMemory": abortOnCannotGrowMemory, "invoke_i": invoke_i, "jsCall_i": jsCall_i, "invoke_ii": invoke_ii, "jsCall_ii": jsCall_ii, "invoke_iii": invoke_iii, "jsCall_iii": jsCall_iii, "invoke_iiii": invoke_iiii, "jsCall_iiii": jsCall_iiii, "invoke_iiiii": invoke_iiiii, "jsCall_iiiii": jsCall_iiiii, "invoke_iiiiii": invoke_iiiiii, "jsCall_iiiiii": jsCall_iiiiii, "invoke_iiiiiii": invoke_iiiiiii, "jsCall_iiiiiii": jsCall_iiiiiii, "invoke_iiiij": invoke_iiiij, "jsCall_iiiij": jsCall_iiiij, "invoke_iij": invoke_iij, "jsCall_iij": jsCall_iij, "invoke_iiji": invoke_iiji, "jsCall_iiji": jsCall_iiji, "invoke_iijii": invoke_iijii, "jsCall_iijii": jsCall_iijii, "invoke_vi": invoke_vi, "jsCall_vi": jsCall_vi, "invoke_vii": invoke_vii, "jsCall_vii": jsCall_vii, "invoke_viii": invoke_viii, "jsCall_viii": jsCall_viii, "invoke_viiii": invoke_viiii, "jsCall_viiii": jsCall_viiii, "invoke_viiiij": invoke_viiiij, "jsCall_viiiij": jsCall_viiiij, "invoke_viji": invoke_viji, "jsCall_viji": jsCall_viji, "___assert_fail": ___assert_fail, "___buildEnvironment": ___buildEnvironment, "___setErrNo": ___setErrNo, "___syscall10": ___syscall10, "___syscall118": ___syscall118, "___syscall140": ___syscall140, "___syscall15": ___syscall15, "___syscall183": ___syscall183, "___syscall194": ___syscall194, "___syscall195": ___syscall195, "___syscall196": ___syscall196, "___syscall197": ___syscall197, "___syscall20": ___syscall20, "___syscall201": ___syscall201, "___syscall202": ___syscall202, "___syscall207": ___syscall207, "___syscall212": ___syscall212, "___syscall221": ___syscall221, "___syscall3": ___syscall3, "___syscall33": ___syscall33, "___syscall39": ___syscall39, "___syscall4": ___syscall4, "___syscall40": ___syscall40, "___syscall5": ___syscall5, "___syscall6": ___syscall6, "___syscall85": ___syscall85, "___syscall94": ___syscall94, "__addDays": __addDays, "__arraySum": __arraySum, "__isLeapYear": __isLeapYear, "_abort": _abort, "_emscripten_memcpy_big": _emscripten_memcpy_big, "_getenv": _getenv, "_gettimeofday": _gettimeofday, "_gmtime": _gmtime, "_gmtime_r": _gmtime_r, "_llvm_pow_f64": _llvm_pow_f64, "_nanosleep": _nanosleep, "_sqlite3CodeSubselect": _sqlite3CodeSubselect, "_sqlite3ExprForVectorField": _sqlite3ExprForVectorField, "_sqlite3VectorFieldSubexpr": _sqlite3VectorFieldSubexpr, "_strftime": _strftime, "_time": _time, "_usleep": _usleep, "_utimes": _utimes, "DYNAMICTOP_PTR": DYNAMICTOP_PTR, "tempDoublePtr": tempDoublePtr, "ABORT": ABORT, "STACKTOP": STACKTOP, "STACK_MAX": STACK_MAX };
 // EMSCRIPTEN_START_ASM
 var asm =Module["asm"]// EMSCRIPTEN_END_ASM
 (Module.asmGlobalArg, Module.asmLibraryArg, buffer);
 
 Module["asm"] = asm;
-var _sqlite3_value_blob = Module["_sqlite3_value_blob"] = function() { return Module["asm"]["_sqlite3_value_blob"].apply(null, arguments) };
-var _sqlite3_column_name = Module["_sqlite3_column_name"] = function() { return Module["asm"]["_sqlite3_column_name"].apply(null, arguments) };
-var _sqlite3_reset = Module["_sqlite3_reset"] = function() { return Module["asm"]["_sqlite3_reset"].apply(null, arguments) };
-var _sqlite3_column_type = Module["_sqlite3_column_type"] = function() { return Module["asm"]["_sqlite3_column_type"].apply(null, arguments) };
-var _sqlite3_exec = Module["_sqlite3_exec"] = function() { return Module["asm"]["_sqlite3_exec"].apply(null, arguments) };
-var stackSave = Module["stackSave"] = function() { return Module["asm"]["stackSave"].apply(null, arguments) };
-var _sqlite3_result_null = Module["_sqlite3_result_null"] = function() { return Module["asm"]["_sqlite3_result_null"].apply(null, arguments) };
-var _sqlite3_step = Module["_sqlite3_step"] = function() { return Module["asm"]["_sqlite3_step"].apply(null, arguments) };
-var _sqlite3_prepare_v2 = Module["_sqlite3_prepare_v2"] = function() { return Module["asm"]["_sqlite3_prepare_v2"].apply(null, arguments) };
-var _sqlite3_close_v2 = Module["_sqlite3_close_v2"] = function() { return Module["asm"]["_sqlite3_close_v2"].apply(null, arguments) };
-var _sqlite3_open = Module["_sqlite3_open"] = function() { return Module["asm"]["_sqlite3_open"].apply(null, arguments) };
-var _sqlite3_result_text = Module["_sqlite3_result_text"] = function() { return Module["asm"]["_sqlite3_result_text"].apply(null, arguments) };
-var _emscripten_get_global_libc = Module["_emscripten_get_global_libc"] = function() { return Module["asm"]["_emscripten_get_global_libc"].apply(null, arguments) };
-var ___errno_location = Module["___errno_location"] = function() { return Module["asm"]["___errno_location"].apply(null, arguments) };
-var _sqlite3_column_bytes = Module["_sqlite3_column_bytes"] = function() { return Module["asm"]["_sqlite3_column_bytes"].apply(null, arguments) };
-var _sqlite3_bind_int = Module["_sqlite3_bind_int"] = function() { return Module["asm"]["_sqlite3_bind_int"].apply(null, arguments) };
-var _sqlite3_bind_blob = Module["_sqlite3_bind_blob"] = function() { return Module["asm"]["_sqlite3_bind_blob"].apply(null, arguments) };
-var _memset = Module["_memset"] = function() { return Module["asm"]["_memset"].apply(null, arguments) };
-var _sbrk = Module["_sbrk"] = function() { return Module["asm"]["_sbrk"].apply(null, arguments) };
-var _sqlite3_value_double = Module["_sqlite3_value_double"] = function() { return Module["asm"]["_sqlite3_value_double"].apply(null, arguments) };
-var _memcpy = Module["_memcpy"] = function() { return Module["asm"]["_memcpy"].apply(null, arguments) };
-var _sqlite3_result_double = Module["_sqlite3_result_double"] = function() { return Module["asm"]["_sqlite3_result_double"].apply(null, arguments) };
-var _sqlite3_value_text = Module["_sqlite3_value_text"] = function() { return Module["asm"]["_sqlite3_value_text"].apply(null, arguments) };
-var _sqlite3_changes = Module["_sqlite3_changes"] = function() { return Module["asm"]["_sqlite3_changes"].apply(null, arguments) };
-var _sqlite3_column_blob = Module["_sqlite3_column_blob"] = function() { return Module["asm"]["_sqlite3_column_blob"].apply(null, arguments) };
-var _sqlite3_bind_parameter_index = Module["_sqlite3_bind_parameter_index"] = function() { return Module["asm"]["_sqlite3_bind_parameter_index"].apply(null, arguments) };
-var stackAlloc = Module["stackAlloc"] = function() { return Module["asm"]["stackAlloc"].apply(null, arguments) };
-var _sqlite3_value_type = Module["_sqlite3_value_type"] = function() { return Module["asm"]["_sqlite3_value_type"].apply(null, arguments) };
-var getTempRet0 = Module["getTempRet0"] = function() { return Module["asm"]["getTempRet0"].apply(null, arguments) };
-var _sqlite3_column_text = Module["_sqlite3_column_text"] = function() { return Module["asm"]["_sqlite3_column_text"].apply(null, arguments) };
-var setTempRet0 = Module["setTempRet0"] = function() { return Module["asm"]["setTempRet0"].apply(null, arguments) };
-var _sqlite3_value_bytes = Module["_sqlite3_value_bytes"] = function() { return Module["asm"]["_sqlite3_value_bytes"].apply(null, arguments) };
-var _sqlite3_finalize = Module["_sqlite3_finalize"] = function() { return Module["asm"]["_sqlite3_finalize"].apply(null, arguments) };
-var _sqlite3_column_double = Module["_sqlite3_column_double"] = function() { return Module["asm"]["_sqlite3_column_double"].apply(null, arguments) };
-var _sqlite3_create_function_v2 = Module["_sqlite3_create_function_v2"] = function() { return Module["asm"]["_sqlite3_create_function_v2"].apply(null, arguments) };
-var _sqlite3_errmsg = Module["_sqlite3_errmsg"] = function() { return Module["asm"]["_sqlite3_errmsg"].apply(null, arguments) };
-var _sqlite3_value_int = Module["_sqlite3_value_int"] = function() { return Module["asm"]["_sqlite3_value_int"].apply(null, arguments) };
-var _sqlite3_data_count = Module["_sqlite3_data_count"] = function() { return Module["asm"]["_sqlite3_data_count"].apply(null, arguments) };
-var _sqlite3_bind_text = Module["_sqlite3_bind_text"] = function() { return Module["asm"]["_sqlite3_bind_text"].apply(null, arguments) };
-var stackRestore = Module["stackRestore"] = function() { return Module["asm"]["stackRestore"].apply(null, arguments) };
-var _sqlite3_bind_double = Module["_sqlite3_bind_double"] = function() { return Module["asm"]["_sqlite3_bind_double"].apply(null, arguments) };
-var _llvm_bswap_i32 = Module["_llvm_bswap_i32"] = function() { return Module["asm"]["_llvm_bswap_i32"].apply(null, arguments) };
-var _RegisterExtensionFunctions = Module["_RegisterExtensionFunctions"] = function() { return Module["asm"]["_RegisterExtensionFunctions"].apply(null, arguments) };
-var _free = Module["_free"] = function() { return Module["asm"]["_free"].apply(null, arguments) };
-var runPostSets = Module["runPostSets"] = function() { return Module["asm"]["runPostSets"].apply(null, arguments) };
-var setThrew = Module["setThrew"] = function() { return Module["asm"]["setThrew"].apply(null, arguments) };
-var establishStackSpace = Module["establishStackSpace"] = function() { return Module["asm"]["establishStackSpace"].apply(null, arguments) };
-var _memmove = Module["_memmove"] = function() { return Module["asm"]["_memmove"].apply(null, arguments) };
-var _sqlite3_free = Module["_sqlite3_free"] = function() { return Module["asm"]["_sqlite3_free"].apply(null, arguments) };
-var _sqlite3_clear_bindings = Module["_sqlite3_clear_bindings"] = function() { return Module["asm"]["_sqlite3_clear_bindings"].apply(null, arguments) };
-var _malloc = Module["_malloc"] = function() { return Module["asm"]["_malloc"].apply(null, arguments) };
-var dynCall_iiii = Module["dynCall_iiii"] = function() { return Module["asm"]["dynCall_iiii"].apply(null, arguments) };
-var dynCall_viiiij = Module["dynCall_viiiij"] = function() { return Module["asm"]["dynCall_viiiij"].apply(null, arguments) };
-var dynCall_viiii = Module["dynCall_viiii"] = function() { return Module["asm"]["dynCall_viiii"].apply(null, arguments) };
-var dynCall_i = Module["dynCall_i"] = function() { return Module["asm"]["dynCall_i"].apply(null, arguments) };
-var dynCall_vi = Module["dynCall_vi"] = function() { return Module["asm"]["dynCall_vi"].apply(null, arguments) };
-var dynCall_viji = Module["dynCall_viji"] = function() { return Module["asm"]["dynCall_viji"].apply(null, arguments) };
-var dynCall_vii = Module["dynCall_vii"] = function() { return Module["asm"]["dynCall_vii"].apply(null, arguments) };
-var dynCall_iiiiiii = Module["dynCall_iiiiiii"] = function() { return Module["asm"]["dynCall_iiiiiii"].apply(null, arguments) };
-var dynCall_ii = Module["dynCall_ii"] = function() { return Module["asm"]["dynCall_ii"].apply(null, arguments) };
-var dynCall_iiiij = Module["dynCall_iiiij"] = function() { return Module["asm"]["dynCall_iiiij"].apply(null, arguments) };
-var dynCall_viii = Module["dynCall_viii"] = function() { return Module["asm"]["dynCall_viii"].apply(null, arguments) };
-var dynCall_iiji = Module["dynCall_iiji"] = function() { return Module["asm"]["dynCall_iiji"].apply(null, arguments) };
-var dynCall_iiiii = Module["dynCall_iiiii"] = function() { return Module["asm"]["dynCall_iiiii"].apply(null, arguments) };
-var dynCall_iijii = Module["dynCall_iijii"] = function() { return Module["asm"]["dynCall_iijii"].apply(null, arguments) };
-var dynCall_iii = Module["dynCall_iii"] = function() { return Module["asm"]["dynCall_iii"].apply(null, arguments) };
-var dynCall_iiiiii = Module["dynCall_iiiiii"] = function() { return Module["asm"]["dynCall_iiiiii"].apply(null, arguments) };
-var dynCall_iij = Module["dynCall_iij"] = function() { return Module["asm"]["dynCall_iij"].apply(null, arguments) };
+var _RegisterExtensionFunctions = Module["_RegisterExtensionFunctions"] = function() {  return Module["asm"]["_RegisterExtensionFunctions"].apply(null, arguments) };
+var ___errno_location = Module["___errno_location"] = function() {  return Module["asm"]["___errno_location"].apply(null, arguments) };
+var _free = Module["_free"] = function() {  return Module["asm"]["_free"].apply(null, arguments) };
+var _llvm_bswap_i32 = Module["_llvm_bswap_i32"] = function() {  return Module["asm"]["_llvm_bswap_i32"].apply(null, arguments) };
+var _malloc = Module["_malloc"] = function() {  return Module["asm"]["_malloc"].apply(null, arguments) };
+var _memcpy = Module["_memcpy"] = function() {  return Module["asm"]["_memcpy"].apply(null, arguments) };
+var _memmove = Module["_memmove"] = function() {  return Module["asm"]["_memmove"].apply(null, arguments) };
+var _memset = Module["_memset"] = function() {  return Module["asm"]["_memset"].apply(null, arguments) };
+var _sbrk = Module["_sbrk"] = function() {  return Module["asm"]["_sbrk"].apply(null, arguments) };
+var _sqlite3_bind_blob = Module["_sqlite3_bind_blob"] = function() {  return Module["asm"]["_sqlite3_bind_blob"].apply(null, arguments) };
+var _sqlite3_bind_double = Module["_sqlite3_bind_double"] = function() {  return Module["asm"]["_sqlite3_bind_double"].apply(null, arguments) };
+var _sqlite3_bind_int = Module["_sqlite3_bind_int"] = function() {  return Module["asm"]["_sqlite3_bind_int"].apply(null, arguments) };
+var _sqlite3_bind_parameter_index = Module["_sqlite3_bind_parameter_index"] = function() {  return Module["asm"]["_sqlite3_bind_parameter_index"].apply(null, arguments) };
+var _sqlite3_bind_text = Module["_sqlite3_bind_text"] = function() {  return Module["asm"]["_sqlite3_bind_text"].apply(null, arguments) };
+var _sqlite3_changes = Module["_sqlite3_changes"] = function() {  return Module["asm"]["_sqlite3_changes"].apply(null, arguments) };
+var _sqlite3_clear_bindings = Module["_sqlite3_clear_bindings"] = function() {  return Module["asm"]["_sqlite3_clear_bindings"].apply(null, arguments) };
+var _sqlite3_close_v2 = Module["_sqlite3_close_v2"] = function() {  return Module["asm"]["_sqlite3_close_v2"].apply(null, arguments) };
+var _sqlite3_column_blob = Module["_sqlite3_column_blob"] = function() {  return Module["asm"]["_sqlite3_column_blob"].apply(null, arguments) };
+var _sqlite3_column_bytes = Module["_sqlite3_column_bytes"] = function() {  return Module["asm"]["_sqlite3_column_bytes"].apply(null, arguments) };
+var _sqlite3_column_double = Module["_sqlite3_column_double"] = function() {  return Module["asm"]["_sqlite3_column_double"].apply(null, arguments) };
+var _sqlite3_column_name = Module["_sqlite3_column_name"] = function() {  return Module["asm"]["_sqlite3_column_name"].apply(null, arguments) };
+var _sqlite3_column_text = Module["_sqlite3_column_text"] = function() {  return Module["asm"]["_sqlite3_column_text"].apply(null, arguments) };
+var _sqlite3_column_type = Module["_sqlite3_column_type"] = function() {  return Module["asm"]["_sqlite3_column_type"].apply(null, arguments) };
+var _sqlite3_create_function_v2 = Module["_sqlite3_create_function_v2"] = function() {  return Module["asm"]["_sqlite3_create_function_v2"].apply(null, arguments) };
+var _sqlite3_data_count = Module["_sqlite3_data_count"] = function() {  return Module["asm"]["_sqlite3_data_count"].apply(null, arguments) };
+var _sqlite3_errmsg = Module["_sqlite3_errmsg"] = function() {  return Module["asm"]["_sqlite3_errmsg"].apply(null, arguments) };
+var _sqlite3_exec = Module["_sqlite3_exec"] = function() {  return Module["asm"]["_sqlite3_exec"].apply(null, arguments) };
+var _sqlite3_finalize = Module["_sqlite3_finalize"] = function() {  return Module["asm"]["_sqlite3_finalize"].apply(null, arguments) };
+var _sqlite3_free = Module["_sqlite3_free"] = function() {  return Module["asm"]["_sqlite3_free"].apply(null, arguments) };
+var _sqlite3_open = Module["_sqlite3_open"] = function() {  return Module["asm"]["_sqlite3_open"].apply(null, arguments) };
+var _sqlite3_prepare_v2 = Module["_sqlite3_prepare_v2"] = function() {  return Module["asm"]["_sqlite3_prepare_v2"].apply(null, arguments) };
+var _sqlite3_reset = Module["_sqlite3_reset"] = function() {  return Module["asm"]["_sqlite3_reset"].apply(null, arguments) };
+var _sqlite3_result_double = Module["_sqlite3_result_double"] = function() {  return Module["asm"]["_sqlite3_result_double"].apply(null, arguments) };
+var _sqlite3_result_null = Module["_sqlite3_result_null"] = function() {  return Module["asm"]["_sqlite3_result_null"].apply(null, arguments) };
+var _sqlite3_result_text = Module["_sqlite3_result_text"] = function() {  return Module["asm"]["_sqlite3_result_text"].apply(null, arguments) };
+var _sqlite3_step = Module["_sqlite3_step"] = function() {  return Module["asm"]["_sqlite3_step"].apply(null, arguments) };
+var _sqlite3_value_blob = Module["_sqlite3_value_blob"] = function() {  return Module["asm"]["_sqlite3_value_blob"].apply(null, arguments) };
+var _sqlite3_value_bytes = Module["_sqlite3_value_bytes"] = function() {  return Module["asm"]["_sqlite3_value_bytes"].apply(null, arguments) };
+var _sqlite3_value_double = Module["_sqlite3_value_double"] = function() {  return Module["asm"]["_sqlite3_value_double"].apply(null, arguments) };
+var _sqlite3_value_int = Module["_sqlite3_value_int"] = function() {  return Module["asm"]["_sqlite3_value_int"].apply(null, arguments) };
+var _sqlite3_value_text = Module["_sqlite3_value_text"] = function() {  return Module["asm"]["_sqlite3_value_text"].apply(null, arguments) };
+var _sqlite3_value_type = Module["_sqlite3_value_type"] = function() {  return Module["asm"]["_sqlite3_value_type"].apply(null, arguments) };
+var establishStackSpace = Module["establishStackSpace"] = function() {  return Module["asm"]["establishStackSpace"].apply(null, arguments) };
+var getTempRet0 = Module["getTempRet0"] = function() {  return Module["asm"]["getTempRet0"].apply(null, arguments) };
+var runPostSets = Module["runPostSets"] = function() {  return Module["asm"]["runPostSets"].apply(null, arguments) };
+var setTempRet0 = Module["setTempRet0"] = function() {  return Module["asm"]["setTempRet0"].apply(null, arguments) };
+var setThrew = Module["setThrew"] = function() {  return Module["asm"]["setThrew"].apply(null, arguments) };
+var stackAlloc = Module["stackAlloc"] = function() {  return Module["asm"]["stackAlloc"].apply(null, arguments) };
+var stackRestore = Module["stackRestore"] = function() {  return Module["asm"]["stackRestore"].apply(null, arguments) };
+var stackSave = Module["stackSave"] = function() {  return Module["asm"]["stackSave"].apply(null, arguments) };
+var dynCall_i = Module["dynCall_i"] = function() {  return Module["asm"]["dynCall_i"].apply(null, arguments) };
+var dynCall_ii = Module["dynCall_ii"] = function() {  return Module["asm"]["dynCall_ii"].apply(null, arguments) };
+var dynCall_iii = Module["dynCall_iii"] = function() {  return Module["asm"]["dynCall_iii"].apply(null, arguments) };
+var dynCall_iiii = Module["dynCall_iiii"] = function() {  return Module["asm"]["dynCall_iiii"].apply(null, arguments) };
+var dynCall_iiiii = Module["dynCall_iiiii"] = function() {  return Module["asm"]["dynCall_iiiii"].apply(null, arguments) };
+var dynCall_iiiiii = Module["dynCall_iiiiii"] = function() {  return Module["asm"]["dynCall_iiiiii"].apply(null, arguments) };
+var dynCall_iiiiiii = Module["dynCall_iiiiiii"] = function() {  return Module["asm"]["dynCall_iiiiiii"].apply(null, arguments) };
+var dynCall_iiiij = Module["dynCall_iiiij"] = function() {  return Module["asm"]["dynCall_iiiij"].apply(null, arguments) };
+var dynCall_iij = Module["dynCall_iij"] = function() {  return Module["asm"]["dynCall_iij"].apply(null, arguments) };
+var dynCall_iiji = Module["dynCall_iiji"] = function() {  return Module["asm"]["dynCall_iiji"].apply(null, arguments) };
+var dynCall_iijii = Module["dynCall_iijii"] = function() {  return Module["asm"]["dynCall_iijii"].apply(null, arguments) };
+var dynCall_vi = Module["dynCall_vi"] = function() {  return Module["asm"]["dynCall_vi"].apply(null, arguments) };
+var dynCall_vii = Module["dynCall_vii"] = function() {  return Module["asm"]["dynCall_vii"].apply(null, arguments) };
+var dynCall_viii = Module["dynCall_viii"] = function() {  return Module["asm"]["dynCall_viii"].apply(null, arguments) };
+var dynCall_viiii = Module["dynCall_viiii"] = function() {  return Module["asm"]["dynCall_viiii"].apply(null, arguments) };
+var dynCall_viiiij = Module["dynCall_viiiij"] = function() {  return Module["asm"]["dynCall_viiiij"].apply(null, arguments) };
+var dynCall_viji = Module["dynCall_viji"] = function() {  return Module["asm"]["dynCall_viji"].apply(null, arguments) };
 ;
-Runtime.stackAlloc = Module['stackAlloc'];
-Runtime.stackSave = Module['stackSave'];
-Runtime.stackRestore = Module['stackRestore'];
-Runtime.establishStackSpace = Module['establishStackSpace'];
-Runtime.setTempRet0 = Module['setTempRet0'];
-Runtime.getTempRet0 = Module['getTempRet0'];
+
 
 
 // === Auto-generated postamble setup entry stuff ===
@@ -6227,62 +5942,75 @@ Module['asm'] = asm;
 
 
 
-if (memoryInitializer) {
-  if (typeof Module['locateFile'] === 'function') {
-    memoryInitializer = Module['locateFile'](memoryInitializer);
-  } else if (Module['memoryInitializerPrefixURL']) {
-    memoryInitializer = Module['memoryInitializerPrefixURL'] + memoryInitializer;
-  }
-  if (ENVIRONMENT_IS_NODE || ENVIRONMENT_IS_SHELL) {
-    var data = Module['readBinary'](memoryInitializer);
-    HEAPU8.set(data, Runtime.GLOBAL_BASE);
-  } else {
-    addRunDependency('memory initializer');
-    var applyMemoryInitializer = function(data) {
-      if (data.byteLength) data = new Uint8Array(data);
-      HEAPU8.set(data, Runtime.GLOBAL_BASE);
-      // Delete the typed array that contains the large blob of the memory initializer request response so that
-      // we won't keep unnecessary memory lying around. However, keep the XHR object itself alive so that e.g.
-      // its .status field can still be accessed later.
-      if (Module['memoryInitializerRequest']) delete Module['memoryInitializerRequest'].response;
-      removeRunDependency('memory initializer');
-    }
-    function doBrowserLoad() {
-      Module['readAsync'](memoryInitializer, applyMemoryInitializer, function() {
-        throw 'could not load memory initializer ' + memoryInitializer;
-      });
-    }
-    if (Module['memoryInitializerRequest']) {
-      // a network request has already been created, just use that
-      function useRequest() {
-        var request = Module['memoryInitializerRequest'];
-        if (request.status !== 200 && request.status !== 0) {
-          // If you see this warning, the issue may be that you are using locateFile or memoryInitializerPrefixURL, and defining them in JS. That
-          // means that the HTML file doesn't know about them, and when it tries to create the mem init request early, does it to the wrong place.
-          // Look in your browser's devtools network console to see what's going on.
-          console.warn('a problem seems to have happened with Module.memoryInitializerRequest, status: ' + request.status + ', retrying ' + memoryInitializer);
-          doBrowserLoad();
-          return;
-        }
-        applyMemoryInitializer(request.response);
-      }
-      if (Module['memoryInitializerRequest'].response) {
-        setTimeout(useRequest, 0); // it's already here; but, apply it asynchronously
-      } else {
-        Module['memoryInitializerRequest'].addEventListener('load', useRequest); // wait for it
-      }
-    } else {
-      // fetch it from the network ourselves
-      doBrowserLoad();
-    }
-  }
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
 /**
  * @constructor
  * @extends {Error}
+ * @this {ExitStatus}
  */
 function ExitStatus(status) {
   this.name = "ExitStatus";
@@ -6302,57 +6030,6 @@ dependenciesFulfilled = function runCaller() {
   if (!Module['calledRun']) dependenciesFulfilled = runCaller; // try this again later, after new deps are fulfilled
 }
 
-Module['callMain'] = Module.callMain = function callMain(args) {
-
-  args = args || [];
-
-  ensureInitRuntime();
-
-  var argc = args.length+1;
-  function pad() {
-    for (var i = 0; i < 4-1; i++) {
-      argv.push(0);
-    }
-  }
-  var argv = [allocate(intArrayFromString(Module['thisProgram']), 'i8', ALLOC_NORMAL) ];
-  pad();
-  for (var i = 0; i < argc-1; i = i + 1) {
-    argv.push(allocate(intArrayFromString(args[i]), 'i8', ALLOC_NORMAL));
-    pad();
-  }
-  argv.push(0);
-  argv = allocate(argv, 'i32', ALLOC_NORMAL);
-
-
-  try {
-
-    var ret = Module['_main'](argc, argv, 0);
-
-
-    // if we're not running an evented main loop, it's time to exit
-    exit(ret, /* implicit = */ true);
-  }
-  catch(e) {
-    if (e instanceof ExitStatus) {
-      // exit() throws this once it's done to make sure execution
-      // has been stopped completely
-      return;
-    } else if (e == 'SimulateInfiniteLoop') {
-      // running an evented main loop, don't immediately exit
-      Module['noExitRuntime'] = true;
-      return;
-    } else {
-      var toLog = e;
-      if (e && typeof e === 'object' && e.stack) {
-        toLog = [e, e.stack];
-      }
-      Module.printErr('exception thrown: ' + toLog);
-      Module['quit'](1, e);
-    }
-  } finally {
-    calledMain = true;
-  }
-}
 
 
 
@@ -6386,7 +6063,6 @@ function run(args) {
 
     if (Module['onRuntimeInitialized']) Module['onRuntimeInitialized']();
 
-    if (Module['_main'] && shouldRunNow) Module['callMain'](args);
 
     postRun();
   }
@@ -6403,10 +6079,15 @@ function run(args) {
     doRun();
   }
 }
-Module['run'] = Module.run = run;
+Module['run'] = run;
 
 function exit(status, implicit) {
-  if (implicit && Module['noExitRuntime']) {
+
+  // if this is just main exit-ing implicitly, and the status is 0, then we
+  // don't need to do anything here and can just leave. if the status is
+  // non-zero, though, then we need to report it.
+  // (we may have warned about this earlier, if a situation justifies doing so)
+  if (implicit && Module['noExitRuntime'] && status === 0) {
     return;
   }
 
@@ -6427,11 +6108,15 @@ function exit(status, implicit) {
   }
   Module['quit'](status, new ExitStatus(status));
 }
-Module['exit'] = Module.exit = exit;
+Module['exit'] = exit;
 
 var abortDecorators = [];
 
 function abort(what) {
+  if (Module['onAbort']) {
+    Module['onAbort'](what);
+  }
+
   if (what !== undefined) {
     Module.print(what);
     Module.printErr(what);
@@ -6443,17 +6128,9 @@ function abort(what) {
   ABORT = true;
   EXITSTATUS = 1;
 
-  var extra = '\nIf this abort() is unexpected, build with -s ASSERTIONS=1 which can give more information.';
-
-  var output = 'abort(' + what + ') at ' + stackTrace() + extra;
-  if (abortDecorators) {
-    abortDecorators.forEach(function(decorator) {
-      output = decorator(output, what);
-    });
-  }
-  throw output;
+  throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.';
 }
-Module['abort'] = Module.abort = abort;
+Module['abort'] = abort;
 
 // {{PRE_RUN_ADDITIONS}}
 
@@ -6464,11 +6141,6 @@ if (Module['preInit']) {
   }
 }
 
-// shouldRunNow refers to calling main(), not run().
-var shouldRunNow = true;
-if (Module['noInitialRun']) {
-  shouldRunNow = false;
-}
 
 Module["noExitRuntime"] = true;
 
@@ -6483,8 +6155,6 @@ run();
 // {{MODULE_ADDITIONS}}
 
 
-
-var Database, RegisterExtensionFunctions, Runtime, Statement, apiTemp, i, sqlite3_bind_blob, sqlite3_bind_double, sqlite3_bind_int, sqlite3_bind_parameter_index, sqlite3_bind_text, sqlite3_changes, sqlite3_clear_bindings, sqlite3_close_v2, sqlite3_column_blob, sqlite3_column_bytes, sqlite3_column_double, sqlite3_column_name, sqlite3_column_text, sqlite3_column_type, sqlite3_create_function_v2, sqlite3_data_count, sqlite3_errmsg, sqlite3_exec, sqlite3_finalize, sqlite3_free, sqlite3_open, sqlite3_prepare_v2, sqlite3_prepare_v2_sqlptr, sqlite3_reset, sqlite3_result_double, sqlite3_result_null, sqlite3_result_text, sqlite3_step, sqlite3_value_blob, sqlite3_value_bytes, sqlite3_value_double, sqlite3_value_int, sqlite3_value_text, sqlite3_value_type;
 
 // Constants
 var NULL = 0;
@@ -6530,6 +6200,8 @@ SQLite.UTF8 = 1;
 var SQL = window['SQL'] || {};
 
 Module['onRuntimeInitialized'] = function() {
+  var Database, RegisterExtensionFunctions, Runtime, Statement, apiTemp, i, sqlite3_bind_blob, sqlite3_bind_double, sqlite3_bind_int, sqlite3_bind_parameter_index, sqlite3_bind_text, sqlite3_changes, sqlite3_clear_bindings, sqlite3_close_v2, sqlite3_column_blob, sqlite3_column_bytes, sqlite3_column_double, sqlite3_column_name, sqlite3_column_text, sqlite3_column_type, sqlite3_create_function_v2, sqlite3_data_count, sqlite3_errmsg, sqlite3_exec, sqlite3_finalize, sqlite3_free, sqlite3_open, sqlite3_prepare_v2, sqlite3_prepare_v2_sqlptr, sqlite3_reset, sqlite3_result_double, sqlite3_result_null, sqlite3_result_text, sqlite3_step, sqlite3_value_blob, sqlite3_value_bytes, sqlite3_value_double, sqlite3_value_int, sqlite3_value_text, sqlite3_value_type;
+
   Runtime = Module['Runtime'];
 
   apiTemp = Runtime.stackAlloc(4);
