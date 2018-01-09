@@ -1632,7 +1632,7 @@ var ASM_CONSTS = [];
 
 STATIC_BASE = GLOBAL_BASE;
 
-STATICTOP = STATIC_BASE + 25664;
+STATICTOP = STATIC_BASE + 25424;
 /* global initializers */  __ATINIT__.push();
 
 
@@ -1641,7 +1641,7 @@ STATICTOP = STATIC_BASE + 25664;
 
 
 
-var STATIC_BUMP = 25664;
+var STATIC_BUMP = 25424;
 Module["STATIC_BASE"] = STATIC_BASE;
 Module["STATIC_BUMP"] = STATIC_BUMP;
 
@@ -5027,6 +5027,53 @@ function copyTempDouble(ptr) {
   }
   }
 
+  function ___syscall54(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // ioctl
+      var stream = SYSCALLS.getStreamFromFD(), op = SYSCALLS.get();
+      switch (op) {
+        case 21509:
+        case 21505: {
+          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          return 0;
+        }
+        case 21510:
+        case 21511:
+        case 21512:
+        case 21506:
+        case 21507:
+        case 21508: {
+          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          return 0; // no-op, not actually adjusting terminal settings
+        }
+        case 21519: {
+          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          var argp = SYSCALLS.get();
+          HEAP32[((argp)>>2)]=0;
+          return 0;
+        }
+        case 21520: {
+          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          return -ERRNO_CODES.EINVAL; // not supported
+        }
+        case 21531: {
+          var argp = SYSCALLS.get();
+          return FS.ioctl(stream, op, argp);
+        }
+        case 21523: {
+          // TODO: in theory we should write to the winsize struct that gets
+          // passed in, but for now musl doesn't read anything on it
+          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          return 0;
+        }
+        default: abort('bad ioctl syscall ' + op);
+      }
+    } catch (e) {
+    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
+    return -e.errno;
+  }
+  }
+
   function ___syscall6(which, varargs) {SYSCALLS.varargs = varargs;
   try {
    // close
@@ -5209,18 +5256,6 @@ function copyTempDouble(ptr) {
     }
 
    
-
-  function _sqlite3CodeSubselect() {
-  Module['printErr']('missing function: sqlite3CodeSubselect'); abort(-1);
-  }
-
-  function _sqlite3ExprForVectorField() {
-  Module['printErr']('missing function: sqlite3ExprForVectorField'); abort(-1);
-  }
-
-  function _sqlite3VectorFieldSubexpr() {
-  Module['printErr']('missing function: sqlite3VectorFieldSubexpr'); abort(-1);
-  }
 
   
   function __isLeapYear(year) {
@@ -5859,7 +5894,7 @@ function jsCall_viji(index,a1,a2,a3) {
 
 Module.asmGlobalArg = {};
 
-Module.asmLibraryArg = { "abort": abort, "assert": assert, "enlargeMemory": enlargeMemory, "getTotalMemory": getTotalMemory, "abortOnCannotGrowMemory": abortOnCannotGrowMemory, "invoke_i": invoke_i, "jsCall_i": jsCall_i, "invoke_ii": invoke_ii, "jsCall_ii": jsCall_ii, "invoke_iii": invoke_iii, "jsCall_iii": jsCall_iii, "invoke_iiii": invoke_iiii, "jsCall_iiii": jsCall_iiii, "invoke_iiiii": invoke_iiiii, "jsCall_iiiii": jsCall_iiiii, "invoke_iiiiii": invoke_iiiiii, "jsCall_iiiiii": jsCall_iiiiii, "invoke_iiiiiii": invoke_iiiiiii, "jsCall_iiiiiii": jsCall_iiiiiii, "invoke_iiiij": invoke_iiiij, "jsCall_iiiij": jsCall_iiiij, "invoke_iij": invoke_iij, "jsCall_iij": jsCall_iij, "invoke_iiji": invoke_iiji, "jsCall_iiji": jsCall_iiji, "invoke_iijii": invoke_iijii, "jsCall_iijii": jsCall_iijii, "invoke_vi": invoke_vi, "jsCall_vi": jsCall_vi, "invoke_vii": invoke_vii, "jsCall_vii": jsCall_vii, "invoke_viii": invoke_viii, "jsCall_viii": jsCall_viii, "invoke_viiii": invoke_viiii, "jsCall_viiii": jsCall_viiii, "invoke_viiiij": invoke_viiiij, "jsCall_viiiij": jsCall_viiiij, "invoke_viji": invoke_viji, "jsCall_viji": jsCall_viji, "___assert_fail": ___assert_fail, "___buildEnvironment": ___buildEnvironment, "___setErrNo": ___setErrNo, "___syscall10": ___syscall10, "___syscall118": ___syscall118, "___syscall140": ___syscall140, "___syscall15": ___syscall15, "___syscall183": ___syscall183, "___syscall194": ___syscall194, "___syscall195": ___syscall195, "___syscall196": ___syscall196, "___syscall197": ___syscall197, "___syscall20": ___syscall20, "___syscall201": ___syscall201, "___syscall202": ___syscall202, "___syscall207": ___syscall207, "___syscall212": ___syscall212, "___syscall221": ___syscall221, "___syscall3": ___syscall3, "___syscall33": ___syscall33, "___syscall39": ___syscall39, "___syscall4": ___syscall4, "___syscall40": ___syscall40, "___syscall5": ___syscall5, "___syscall6": ___syscall6, "___syscall85": ___syscall85, "___syscall94": ___syscall94, "__addDays": __addDays, "__arraySum": __arraySum, "__isLeapYear": __isLeapYear, "_abort": _abort, "_emscripten_memcpy_big": _emscripten_memcpy_big, "_getenv": _getenv, "_gettimeofday": _gettimeofday, "_gmtime": _gmtime, "_gmtime_r": _gmtime_r, "_llvm_pow_f64": _llvm_pow_f64, "_nanosleep": _nanosleep, "_sqlite3CodeSubselect": _sqlite3CodeSubselect, "_sqlite3ExprForVectorField": _sqlite3ExprForVectorField, "_sqlite3VectorFieldSubexpr": _sqlite3VectorFieldSubexpr, "_strftime": _strftime, "_time": _time, "_usleep": _usleep, "_utimes": _utimes, "DYNAMICTOP_PTR": DYNAMICTOP_PTR, "tempDoublePtr": tempDoublePtr, "ABORT": ABORT, "STACKTOP": STACKTOP, "STACK_MAX": STACK_MAX };
+Module.asmLibraryArg = { "abort": abort, "assert": assert, "enlargeMemory": enlargeMemory, "getTotalMemory": getTotalMemory, "abortOnCannotGrowMemory": abortOnCannotGrowMemory, "invoke_i": invoke_i, "jsCall_i": jsCall_i, "invoke_ii": invoke_ii, "jsCall_ii": jsCall_ii, "invoke_iii": invoke_iii, "jsCall_iii": jsCall_iii, "invoke_iiii": invoke_iiii, "jsCall_iiii": jsCall_iiii, "invoke_iiiii": invoke_iiiii, "jsCall_iiiii": jsCall_iiiii, "invoke_iiiiii": invoke_iiiiii, "jsCall_iiiiii": jsCall_iiiiii, "invoke_iiiiiii": invoke_iiiiiii, "jsCall_iiiiiii": jsCall_iiiiiii, "invoke_iiiij": invoke_iiiij, "jsCall_iiiij": jsCall_iiiij, "invoke_iij": invoke_iij, "jsCall_iij": jsCall_iij, "invoke_iiji": invoke_iiji, "jsCall_iiji": jsCall_iiji, "invoke_iijii": invoke_iijii, "jsCall_iijii": jsCall_iijii, "invoke_vi": invoke_vi, "jsCall_vi": jsCall_vi, "invoke_vii": invoke_vii, "jsCall_vii": jsCall_vii, "invoke_viii": invoke_viii, "jsCall_viii": jsCall_viii, "invoke_viiii": invoke_viiii, "jsCall_viiii": jsCall_viiii, "invoke_viiiij": invoke_viiiij, "jsCall_viiiij": jsCall_viiiij, "invoke_viji": invoke_viji, "jsCall_viji": jsCall_viji, "___assert_fail": ___assert_fail, "___buildEnvironment": ___buildEnvironment, "___setErrNo": ___setErrNo, "___syscall10": ___syscall10, "___syscall118": ___syscall118, "___syscall140": ___syscall140, "___syscall15": ___syscall15, "___syscall183": ___syscall183, "___syscall194": ___syscall194, "___syscall195": ___syscall195, "___syscall196": ___syscall196, "___syscall197": ___syscall197, "___syscall20": ___syscall20, "___syscall201": ___syscall201, "___syscall202": ___syscall202, "___syscall207": ___syscall207, "___syscall212": ___syscall212, "___syscall221": ___syscall221, "___syscall3": ___syscall3, "___syscall33": ___syscall33, "___syscall39": ___syscall39, "___syscall4": ___syscall4, "___syscall40": ___syscall40, "___syscall5": ___syscall5, "___syscall54": ___syscall54, "___syscall6": ___syscall6, "___syscall85": ___syscall85, "___syscall94": ___syscall94, "__addDays": __addDays, "__arraySum": __arraySum, "__isLeapYear": __isLeapYear, "_abort": _abort, "_emscripten_memcpy_big": _emscripten_memcpy_big, "_getenv": _getenv, "_gettimeofday": _gettimeofday, "_gmtime": _gmtime, "_gmtime_r": _gmtime_r, "_llvm_pow_f64": _llvm_pow_f64, "_nanosleep": _nanosleep, "_strftime": _strftime, "_time": _time, "_usleep": _usleep, "_utimes": _utimes, "DYNAMICTOP_PTR": DYNAMICTOP_PTR, "tempDoublePtr": tempDoublePtr, "ABORT": ABORT, "STACKTOP": STACKTOP, "STACK_MAX": STACK_MAX };
 // EMSCRIPTEN_START_ASM
 var asm =Module["asm"]// EMSCRIPTEN_END_ASM
 (Module.asmGlobalArg, Module.asmLibraryArg, buffer);
