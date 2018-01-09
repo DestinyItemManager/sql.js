@@ -32,7 +32,7 @@ js/sql%.js: js/shell-pre.js js/sql%-raw.js js/shell-post.js
 	cat $^ > $@
 
 js/sql%-raw.js: c/sqlite3.bc c/extension-functions.bc js/api.js exported_functions
-	$(EMCC) $(EMFLAGS) -s EXPORTED_FUNCTIONS=@exported_functions -s EXTRA_EXPORTED_RUNTIME_METHODS=@extra_exported_runtime_methods c/extension-functions.bc c/sqlite3.bc --pre-js js/api.js -o $@ ;\
+	$(EMCC) $(EMFLAGS) -s EXPORTED_FUNCTIONS=@exported_functions c/extension-functions.bc c/sqlite3.bc --pre-js js/api.js -o $@ ;\
 
 c/sqlite3.bc: c/sqlite3.c
 	# Generate llvm bitcode
