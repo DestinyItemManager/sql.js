@@ -42,11 +42,9 @@ SQLite.UTF8 = 1;
 var SQL = window['SQL'] || {};
 
 Module['onRuntimeInitialized'] = function() {
-  var Database, RegisterExtensionFunctions, Runtime, Statement, apiTemp, i, sqlite3_bind_blob, sqlite3_bind_double, sqlite3_bind_int, sqlite3_bind_parameter_index, sqlite3_bind_text, sqlite3_changes, sqlite3_clear_bindings, sqlite3_close_v2, sqlite3_column_blob, sqlite3_column_bytes, sqlite3_column_double, sqlite3_column_name, sqlite3_column_text, sqlite3_column_type, sqlite3_create_function_v2, sqlite3_data_count, sqlite3_errmsg, sqlite3_exec, sqlite3_finalize, sqlite3_free, sqlite3_open, sqlite3_prepare_v2, sqlite3_prepare_v2_sqlptr, sqlite3_reset, sqlite3_result_double, sqlite3_result_null, sqlite3_result_text, sqlite3_step, sqlite3_value_blob, sqlite3_value_bytes, sqlite3_value_double, sqlite3_value_int, sqlite3_value_text, sqlite3_value_type;
+  var Database, RegisterExtensionFunctions, Statement, apiTemp, i, sqlite3_bind_blob, sqlite3_bind_double, sqlite3_bind_int, sqlite3_bind_parameter_index, sqlite3_bind_text, sqlite3_changes, sqlite3_clear_bindings, sqlite3_close_v2, sqlite3_column_blob, sqlite3_column_bytes, sqlite3_column_double, sqlite3_column_name, sqlite3_column_text, sqlite3_column_type, sqlite3_create_function_v2, sqlite3_data_count, sqlite3_errmsg, sqlite3_exec, sqlite3_finalize, sqlite3_free, sqlite3_open, sqlite3_prepare_v2, sqlite3_prepare_v2_sqlptr, sqlite3_reset, sqlite3_result_double, sqlite3_result_null, sqlite3_result_text, sqlite3_step, sqlite3_value_blob, sqlite3_value_bytes, sqlite3_value_double, sqlite3_value_int, sqlite3_value_text, sqlite3_value_type;
 
-  Runtime = Module['Runtime'];
-
-  apiTemp = Runtime.stackAlloc(4);
+  apiTemp = Module['stackAlloc'](4);
   /* Represents an prepared statement.
 
   Prepared statements allow you to have a template sql string,
@@ -491,12 +489,12 @@ Module['onRuntimeInitialized'] = function() {
       if (!this.db) {
         throw "Database closed";
       }
-      stack = Runtime.stackSave();
-      nextSqlPtr = Runtime.stackAlloc(sql.length << 2 + 1);
+      stack = Module['stackSave']();
+      nextSqlPtr = Module['stackAlloc'](sql.length << 2 + 1);
       var buflen = sql.length<<2 + 1;
-      nextSqlPtr = Runtime.stackAlloc(buflen);
+      nextSqlPtr = Module['stackAlloc'](buflen);
       stringToUTF8(sql, nextSqlPtr, buflen);
-      pzTail = Runtime.stackAlloc(4);
+      pzTail = Module['stackAlloc'](4);
       results = [];
       while (getValue(nextSqlPtr, 'i8') !== NULL) {
         setValue(apiTemp, 0, 'i32');
@@ -521,7 +519,7 @@ Module['onRuntimeInitialized'] = function() {
         }
         stmt['free']();
       }
-      Runtime.stackRestore(stack);
+      Module['stackRestore'](stack);
       return results;
     };
 
@@ -721,7 +719,7 @@ Module['onRuntimeInitialized'] = function() {
           }
         }
       };
-      func_ptr = Runtime.addFunction(wrapped_func);
+      func_ptr = Module['addFunction'](wrapped_func);
       this.handleError(sqlite3_create_function_v2(this.db, name, func.length, SQLite.UTF8, 0, func_ptr, 0, 0, 0));
       return this;
     };
